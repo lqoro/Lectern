@@ -50,6 +50,10 @@ class Model:
     # Other files that are the same model and may already be on disk, as
     # (filename, size_mb). Used when found; never downloaded.
     alts: tuple[tuple[str, int], ...] = ()
+    # Measured speed, x real time, on an M1 (bench/results.md): with the
+    # Apple GPU, and CPU-only. Used for "an hour of lecture takes ~N min".
+    xrt_gpu: float = 0.0
+    xrt_cpu: float = 0.0
 
 
 # Ordered best-quality first. Measured 2026-10-26 on an M1 (bench/results.md):
@@ -59,18 +63,20 @@ class Model:
 # the M1's CPU: tiny 74x, base 30x, small 10x, turbo 3.1x, large 1.2x real time.
 CATALOG: tuple[Model, ...] = (
     Model("large-v3-q5_0", "ggml-large-v3-q5_0.bin", 1081, 1507, 5,
-          "Most accurate", "Slowest. Needs a strong machine with 16 GB or more."),
+          "Most accurate", "Slowest. Needs a strong machine with 16 GB or more.",
+          xrt_gpu=6.1, xrt_cpu=1.2),
     Model("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 574, 736, 4,
-          "Balanced (default)", "Near-large accuracy at about twice the speed."),
+          "Balanced (default)", "Near-large accuracy at about twice the speed.",
+          xrt_gpu=9.0, xrt_cpu=3.1),
     Model("small.en", "ggml-small.en-q5_1.bin", 190, 382, 3,
           "Light", "Good for older or low-memory computers. English only.",
-          alts=(("ggml-small.en.bin", 488),)),
+          alts=(("ggml-small.en.bin", 488),), xrt_gpu=23.2, xrt_cpu=10.4),
     Model("base.en", "ggml-base.en-q5_1.bin", 60, 208, 2,
           "Very light", "Fast on weak machines; more mistakes. English only.",
-          alts=(("ggml-base.en.bin", 148),)),
+          alts=(("ggml-base.en.bin", 148),), xrt_gpu=57.2, xrt_cpu=29.8),
     Model("tiny.en", "ggml-tiny.en-q5_1.bin", 32, 185, 1,
           "Minimal", "For very old machines. Expect many mistakes. English only.",
-          alts=(("ggml-tiny.en.bin", 78),)),
+          alts=(("ggml-tiny.en.bin", 78),), xrt_gpu=72.9, xrt_cpu=73.7),
 )
 BY_ID = {m.id: m for m in CATALOG}
 
@@ -141,6 +147,54 @@ def recommend(hw: dict | None = None) -> Model:
     return BY_ID["tiny.en"]
 
 
+# Real lectures ran slower than the 5-minute benchmark (a loaded machine,
+# memory shared with the notes model), so estimates are padded, and an
+# unknown non-Apple CPU is assumed to be half an M1's CPU.
+_REAL_WORLD_SLOWDOWN = 1.5
+_UNKNOWN_CPU_FACTOR = 0.5
+
+
+def minutes_per_hour(m: Model, hw: dict) -> int:
+    """Rough minutes to transcribe one hour of lecture with `m` here."""
+    accel = hw.get("accelerator") or "cpu"
+    if accel == "metal":
+        xrt = m.xrt_gpu
+    else:
+        xrt = m.xrt_cpu * (1.0 if hw.get("os") == "Darwin" else _UNKNOWN_CPU_FACTOR)
+    if xrt <= 0:
+        return 0
+    return max(1, round(60 / xrt * _REAL_WORLD_SLOWDOWN))
+
+
+def device_label(hw: dict) -> str:
+    """ "MacBook Air · Apple M1 · 8 GB memory" -- whatever is known."""
+    d = hw.get("device") or {}
+    ram = hw.get("ram_total_mb")
+    parts = [d.get("name"), d.get("chip"),
+             f"{round(ram / 1024)} GB memory" if ram else None]
+    if hw.get("accelerator") == "cuda":
+        parts.append("NVIDIA GPU")
+    return " · ".join(p for p in parts if p) or "this computer"
+
+
+def recommend_why(m: Model, hw: dict) -> str:
+    """One sentence on why `m` suits this machine."""
+    ram_gb = round((hw.get("ram_total_mb") or 0) / 1024)
+    cores = hw.get("cpu_cores") or 0
+    mins = minutes_per_hour(m, hw)
+    took = f" An hour of lecture should take about {mins} min to transcribe." if mins else ""
+    if hw.get("accelerator") == "metal":
+        base = (f"Apple chip with {ram_gb} GB: enough for the balanced model, which runs on the GPU."
+                if m.id == "large-v3-turbo-q5_0" else
+                f"Apple chip with {ram_gb} GB: a lighter model leaves memory for your other apps.")
+    elif m.id == "large-v3-turbo-q5_0":
+        base = f"{cores} CPU cores and {ram_gb} GB: strong enough for the balanced model without a GPU."
+    else:
+        base = (f"No supported GPU, {cores} CPU cores and {ram_gb} GB: "
+                f"the {m.label.lower()} model keeps transcription reasonably quick.")
+    return base + took
+
+
 def active() -> tuple[Path | None, Model | None, str]:
     """The model file to transcribe with, plus why it was chosen.
 
@@ -185,7 +239,11 @@ def describe() -> dict:
     total = (hw.get("ram_total_mb") or 0) * 2**20 or None
     return {
         "hardware": hw,
+        "device_label": device_label(hw),
         "recommended": rec.id,
+        "recommended_label": rec.label,
+        "recommended_size_mb": rec.size_mb,
+        "recommended_why": recommend_why(rec, hw),
         "active": {"id": cur.id if cur else None,
                    "file": p.name if p else None, "why": why},
         "models": [{
@@ -194,6 +252,7 @@ def describe() -> dict:
             "installed": installed_path(m) is not None,
             "fits": fits(m, total),
             "recommended": m.id == rec.id,
+            "min_per_hour": minutes_per_hour(m, hw),
         } for m in CATALOG],
         "download": DOWNLOADER.status(),
     }

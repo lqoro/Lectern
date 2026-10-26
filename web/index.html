@@ -30,8 +30,9 @@
   <button id="newBtn" class="primary">Record a lecture</button>
 </header>
 <div id="modelBanner" class="banner hidden" role="status">
-  <span>Before your first lecture, download a speech model — it turns the audio into text.</span>
-  <button id="modelBannerBtn" class="primary tiny">Choose a model</button>
+  <span id="modelBannerText">Before your first lecture, download a speech model — it turns the audio into text.</span>
+  <button id="modelBannerGo" class="primary tiny hidden">Download</button>
+  <button id="modelBannerBtn" class="ghost tiny">See all models</button>
 </div>
 
 <main id="main">
@@ -190,6 +191,7 @@
     <h3>Settings</h3>
     <h4>Speech model</h4>
     <p class="hint" id="setHw">Checking this computer…</p>
+    <p class="hint rec" id="setRec"></p>
     <p class="hint">The model turns speech into text. Bigger is more accurate but slower and
     needs more memory. Downloads only happen when you press a button.</p>
     <ul id="modelList" class="models"></ul>

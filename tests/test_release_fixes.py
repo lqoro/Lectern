@@ -175,3 +175,39 @@ class FastResume(Base):
             self.assertIsNone(recorder.Recorder._resume_device(lec, "complete"))
         with mock.patch.object(audio, "list_audio_devices", lambda use_cache=True: devs[:1]):
             self.assertIsNone(recorder.Recorder._resume_device(lec, "paused"))
+
+
+class Recommendation(Base):
+    def setUp(self):
+        super().setUp()
+        self.models = importlib.import_module("lectern.models")
+
+    def hw(self, **kw):
+        base = {"os": "Darwin", "accelerator": "metal", "ram_total_mb": 8192,
+                "cpu_cores": 8, "device": {"name": "MacBook Air", "chip": "Apple M1"}}
+        return {**base, **kw}
+
+    def test_device_label_names_the_machine(self):
+        self.assertEqual(self.models.device_label(self.hw()), "MacBook Air · Apple M1 · 8 GB memory")
+        self.assertEqual(self.models.device_label({"device": {}}), "this computer")
+
+    def test_recommendation_explains_itself_with_a_time_estimate(self):
+        hw = self.hw()
+        rec = self.models.recommend(hw)
+        self.assertEqual(rec.id, "large-v3-turbo-q5_0")
+        why = self.models.recommend_why(rec, hw)
+        self.assertIn("Apple chip with 8 GB", why)
+        self.assertIn(f"about {self.models.minutes_per_hour(rec, hw)} min", why)
+
+    def test_weak_pc_gets_a_light_model_and_slower_estimates(self):
+        weak = self.hw(os="Windows", accelerator="cpu", ram_total_mb=4096, cpu_cores=2,
+                       device={"name": None, "chip": "Intel Celeron"})
+        rec = self.models.recommend(weak)
+        self.assertEqual(rec.id, "base.en")
+        turbo = self.models.BY_ID["large-v3-turbo-q5_0"]
+        self.assertGreater(self.models.minutes_per_hour(turbo, weak),
+                           self.models.minutes_per_hour(turbo, self.hw()))
+
+    def test_device_never_includes_serial_numbers(self):
+        hardware = importlib.import_module("lectern.hardware")
+        self.assertEqual(set(hardware.device()), {"name", "chip"})

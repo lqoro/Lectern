@@ -1084,10 +1084,15 @@ document.addEventListener("click", (e) => {
 
 let recWasActive = false, recActive = false, recLectureId = null;
 let lastStopSeen = null;
+let bannerShown = false, bannerRec = null;   // first-run "download a model" banner
 async function poll() {
   let s;
   try { s = await api("/api/status"); } catch { return setTimeout(poll, 3000); }
-  $("modelBanner").classList.toggle("hidden", !s.needs_model);
+  if (s.needs_model !== bannerShown) {
+    bannerShown = s.needs_model;
+    $("modelBanner").classList.toggle("hidden", !s.needs_model);
+    if (s.needs_model) fillModelBanner();
+  }
   const pill = $("recPill");
   recActive = !!s.recording;
   recLectureId = s.lecture_id || null;
@@ -1139,9 +1144,10 @@ async function loadSettings() {
   let s;
   try { s = await api("/api/system"); }
   catch { $("setHw").textContent = "Could not read this computer's details."; return; }
-  const hw = s.hardware, ram = hw.ram_total_mb ? `${Math.round(hw.ram_total_mb / 1024)} GB memory` : "memory unknown";
+  const hw = s.hardware;
   const accel = { metal: "Apple GPU", cuda: "NVIDIA GPU", cpu: "no GPU" }[hw.accelerator] || hw.accelerator;
-  $("setHw").textContent = `This computer: ${ram}, ${hw.cpu_cores} cores, ${accel}.`;
+  $("setHw").textContent = `This computer: ${s.device_label}, ${hw.cpu_cores} cores, ${accel}.`;
+  $("setRec").textContent = `Recommended: ${s.recommended_label}. ${s.recommended_why}`;
 
   const ul = $("modelList"); ul.replaceChildren();
   const busy = !!(s.download && s.download.running);
@@ -1152,7 +1158,8 @@ async function loadSettings() {
     if (m.recommended) name.append(el("span", "tag", "recommended"));
     if (m.id === s.active.id) name.append(el("span", "tag", "in use"));
     if (!m.fits) name.append(el("span", "tag", "may be too heavy here"));
-    main.append(name, el("div", "m-note", `${m.note} ${mbText(m.size_mb)} download.`));
+    const eta = m.min_per_hour ? ` About ${m.min_per_hour} min per hour of lecture here.` : "";
+    main.append(name, el("div", "m-note", `${m.note} ${mbText(m.size_mb)} download.${eta}`));
     li.append(main);
     const btn = el("button", m.installed ? "" : "primary");
     if (m.installed) {
@@ -1242,6 +1249,26 @@ document.addEventListener("keydown", (e) => {
   stop();
   saveShortcut({ enabled: true, key: m[1] || m[2], mods });
 }, true);
+async function fillModelBanner() {
+  try {
+    const sys = await api("/api/system");
+    bannerRec = sys.recommended;
+    const dev = sys.hardware.device || {}, ram = sys.hardware.ram_total_mb;
+    const specs = [dev.chip, ram && `${Math.round(ram / 1024)} GB`].filter(Boolean).join(", ");
+    const what = dev.name ? `this ${dev.name}${specs ? ` (${specs})` : ""}` : "this computer";
+    const label = sys.recommended_label.replace(/\s*\(default\)$/, "");
+    $("modelBannerText").textContent =
+      `Before your first lecture, download a speech model. Recommended for ${what}: ` +
+      `${label}, ${mbText(sys.recommended_size_mb)}.`;
+    $("modelBannerGo").textContent = `Download ${label}`;
+    $("modelBannerGo").classList.remove("hidden");
+  } catch { /* keep the generic text */ }
+}
+$("modelBannerGo").onclick = async () => {
+  if (!bannerRec) return;
+  try { await jpost("/api/models/download", { id: bannerRec }); } catch (e) { return toast(e.message); }
+  $("settingsBtn").click();                       // shows the download progress
+};
 $("modelBannerBtn").onclick = () => $("settingsBtn").click();
 $("settingsDlg").addEventListener("close", () => clearTimeout(dlTimer));
 $("dlCancel").onclick = async () => { await jpost("/api/models/download/cancel"); setTimeout(loadSettings, 500); };
@@ -1268,6 +1295,7 @@ $("diagBtn").onclick = async () => {
     const hw = d.hardware;
     const text = [
       `${d.app}`,
+      `Device: ${[hw.device?.name, hw.device?.chip].filter(Boolean).join(", ") || "unknown"}`,
       `OS: ${hw.os} ${hw.machine}, Python ${hw.python}`,
       `Memory: ${hw.ram_total_mb} MB total, ${hw.ram_available_mb} MB available`,
       `CPU: ${hw.cpu_cores} cores / ${hw.cpu_threads} threads, accelerator ${hw.accelerator}`,

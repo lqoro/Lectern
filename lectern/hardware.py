@@ -10,6 +10,8 @@ import platform
 import re
 import shutil
 import subprocess
+import functools
+import json
 import sys
 
 from . import platform_compat as pc
@@ -163,6 +165,34 @@ def whisper_threads() -> int:
     return max(1, min(8, cpu_cores() - 1))
 
 
+@functools.lru_cache(maxsize=1)
+def device() -> dict:
+    """What this computer is, in words a person recognises: e.g.
+    {"name": "MacBook Air", "chip": "Apple M1"}. Only the model name and
+    processor are read -- never serial numbers or hardware IDs. Cached: it
+    cannot change while the app runs, and system_profiler takes ~0.5 s."""
+    name = chip = None
+    if pc.IS_MAC:
+        try:
+            info = json.loads(_run(["system_profiler", "SPHardwareDataType", "-json"],
+                                   timeout=8) or "{}")
+            hw = (info.get("SPHardwareDataType") or [{}])[0]
+            name = hw.get("machine_name")
+            chip = hw.get("chip_type") or hw.get("cpu_type")
+        except (ValueError, AttributeError, IndexError):
+            pass
+        chip = chip or _run(["sysctl", "-n", "machdep.cpu.brand_string"]).strip() or None
+    elif pc.IS_LINUX:
+        name = _read("/sys/devices/virtual/dmi/id/product_name").strip() or None
+        m = re.search(r"^model name\s*:\s*(.+)$", _read("/proc/cpuinfo"), re.M)
+        chip = m.group(1).strip() if m else None
+    elif pc.IS_WIN:
+        chip = platform.processor() or None
+    if name and name.lower() in ("to be filled by o.e.m.", "system product name", "default string"):
+        name = None                    # placeholder text some PC makers leave in
+    return {"name": name, "chip": chip}
+
+
 def snapshot() -> dict:
     total, avail = total_ram_bytes(), available_ram_bytes()
     return {
@@ -174,6 +204,7 @@ def snapshot() -> dict:
         "cpu_cores": cpu_cores(),
         "cpu_threads": cpu_threads(),
         "accelerator": accelerator(),
+        "device": device(),
         "on_battery": on_battery(),
         "whisper_threads": whisper_threads(),
     }
