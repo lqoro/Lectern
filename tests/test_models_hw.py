@@ -53,6 +53,13 @@ class Selection(unittest.TestCase):
         self.m.save_settings(whisper_model=None)
         self.assertIn(self.m.active()[1].id, ("base.en", "small.en"))
 
+    def test_full_precision_file_counts_as_installed(self):
+        small = self.m.BY_ID["small.en"]
+        d = self.m.BENCH_DIR; d.mkdir(parents=True)
+        with open(d / "ggml-small.en.bin", "wb") as f:
+            f.truncate(488 * 1_000_000)
+        self.assertEqual(self.m.installed_path(small).name, "ggml-small.en.bin")
+
     def test_env_override(self):
         os.environ["LECTERN_MODEL"] = "/some/file.bin"
         self.assertEqual(self.m.active()[0], Path("/some/file.bin"))
@@ -62,7 +69,8 @@ class Selection(unittest.TestCase):
             {"ram_total_mb": ram, "accelerator": accel, "cpu_cores": cores}).id
         self.assertEqual(r(8192, "metal", 8), "large-v3-turbo-q5_0")
         self.assertEqual(r(4096, "metal", 8), "small.en")
-        self.assertEqual(r(16384, "cpu", 8), "small.en")
+        self.assertEqual(r(16384, "cpu", 8), "large-v3-turbo-q5_0")
+        self.assertEqual(r(8192, "cpu", 8), "small.en")
         self.assertEqual(r(8192, "cpu", 2), "base.en")
         self.assertEqual(r(2048, "cpu", 2), "tiny.en")
 

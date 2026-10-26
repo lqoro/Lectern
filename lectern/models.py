@@ -41,26 +41,36 @@ _MB = 1_000_000          # catalogue sizes are decimal MB, as on the download pa
 @dataclass(frozen=True)
 class Model:
     id: str
-    file: str
-    size_mb: int            # file on disk
+    file: str               # preferred file (what a download fetches)
+    size_mb: int            # that file on disk
     ram_mb: int             # peak RAM while transcribing (measured, M1)
     quality: int            # 1 (lowest) .. 5, for ordering only
     label: str
     note: str
+    # Other files that are the same model and may already be on disk, as
+    # (filename, size_mb). Used when found; never downloaded.
+    alts: tuple[tuple[str, int], ...] = ()
 
 
-# Ordered best-quality first.
+# Ordered best-quality first. Measured 2026-10-26 on an M1 (bench/results.md):
+# the q5_1 builds of tiny/base/small are ~60% smaller, 15-25% faster and use
+# 30-45% less RAM than the full-precision files, with no loss on the
+# agreement measure, so they are what Lectern downloads. CPU-only speeds on
+# the M1's CPU: tiny 74x, base 30x, small 10x, turbo 3.1x, large 1.2x real time.
 CATALOG: tuple[Model, ...] = (
-    Model("large-v3-q5_0", "ggml-large-v3-q5_0.bin", 1081, 1453, 5,
+    Model("large-v3-q5_0", "ggml-large-v3-q5_0.bin", 1081, 1507, 5,
           "Most accurate", "Slowest. Needs a strong machine with 16 GB or more."),
-    Model("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 574, 722, 4,
+    Model("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 574, 736, 4,
           "Balanced (default)", "Near-large accuracy at about twice the speed."),
-    Model("small.en", "ggml-small.en.bin", 488, 697, 3,
-          "Light", "Good for older or low-memory computers. English only."),
-    Model("base.en", "ggml-base.en.bin", 148, 332, 2,
-          "Very light", "Fast on weak machines; more mistakes. English only."),
-    Model("tiny.en", "ggml-tiny.en.bin", 78, 228, 1,
-          "Minimal", "For very old machines. Expect many mistakes. English only."),
+    Model("small.en", "ggml-small.en-q5_1.bin", 190, 382, 3,
+          "Light", "Good for older or low-memory computers. English only.",
+          alts=(("ggml-small.en.bin", 488),)),
+    Model("base.en", "ggml-base.en-q5_1.bin", 60, 208, 2,
+          "Very light", "Fast on weak machines; more mistakes. English only.",
+          alts=(("ggml-base.en.bin", 148),)),
+    Model("tiny.en", "ggml-tiny.en-q5_1.bin", 32, 185, 1,
+          "Minimal", "For very old machines. Expect many mistakes. English only.",
+          alts=(("ggml-tiny.en.bin", 78),)),
 )
 BY_ID = {m.id: m for m in CATALOG}
 
@@ -90,11 +100,12 @@ def search_dirs() -> list[Path]:
 
 
 def installed_path(model: Model) -> Path | None:
-    for d in search_dirs():
-        p = d / model.file
-        # A partial or truncated file must not count as installed.
-        if p.is_file() and p.stat().st_size >= model.size_mb * _MB * 0.9:
-            return p
+    for fname, size_mb in ((model.file, model.size_mb), *model.alts):
+        for d in search_dirs():
+            p = d / fname
+            # A partial or truncated file must not count as installed.
+            if p.is_file() and p.stat().st_size >= size_mb * _MB * 0.9:
+                return p
     return None
 
 
@@ -118,6 +129,10 @@ def recommend(hw: dict | None = None) -> Model:
         if ram_gb >= 8:
             return BY_ID["large-v3-turbo-q5_0"]
         return BY_ID["small.en"]
+    # CPU only. Turbo ran at 3.1x real time on the M1's CPU (an hour of
+    # lecture in ~20 min); an older CPU is slower, so only a big one gets it.
+    if ram_gb >= 16 and cores >= 8:
+        return BY_ID["large-v3-turbo-q5_0"]
     if ram_gb >= 8 and cores >= 6:
         return BY_ID["small.en"]
     if ram_gb >= 4:
