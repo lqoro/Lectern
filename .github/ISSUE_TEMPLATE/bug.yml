@@ -1,0 +1,30 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: In Lectern, open Settings (⚙) and press "Copy diagnostics", then paste here. It contains system details only, no lecture content.
+      render: text
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Windows, Linux]
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Server log (optional)
+      description: "The last lines of ~/Library/Application Support/Lectern/logs/server.out. Check it doesn't contain anything private before pasting."
+      render: text

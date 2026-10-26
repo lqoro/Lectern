@@ -21,6 +21,9 @@ from pathlib import Path
 from . import archive, config, storage
 from .storage import Lecture
 
+# An import whose upload file was written this recently is still streaming in.
+_UPLOAD_GRACE_S = 120
+
 log = logging.getLogger(__name__)
 
 TRASH_MAX_AGE_S = 7 * 24 * 3600
@@ -126,6 +129,15 @@ def run_startup_recovery(submit, submit_import=None) -> list[str]:
                 # An import has no live writer to lose: the uploaded file is
                 # still in .work, so start the extraction over from scratch.
                 from . import importer
+                part = lec.work / (importer.SOURCE_NAME + ".part")
+                try:
+                    uploading = time.time() - part.stat().st_mtime < _UPLOAD_GRACE_S
+                except OSError:
+                    uploading = False
+                if uploading:
+                    # Recovery runs while the server already accepts requests,
+                    # so this may be an upload that started seconds ago.
+                    continue
                 if importer.source_path(lec).is_file() and submit_import:
                     # extract() writes a .part and renames, so re-running it
                     # simply replaces any seed segment from the first attempt.
@@ -162,6 +174,14 @@ def run_startup_recovery(submit, submit_import=None) -> list[str]:
 
 
 # ------------------------------------------------- deferred WAV release
+def _concat_had_errors(work_dir: Path) -> bool:
+    try:
+        man = json.loads((work_dir / "concat.manifest.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return any(seg.get("error") for seg in man.get("segments") or [])
+
+
 def _reverify(lec: Lecture) -> bool:
     """Re-run the codec and full-decode checks against the installed archive."""
     p = lec.archive_path
@@ -230,7 +250,13 @@ def sweep_trash() -> dict:
             except (FileNotFoundError, ValueError):
                 lec = None
             try:
-                if lec is not None and _reverify(lec):
+                if _concat_had_errors(entry):
+                    # A segment could not be read into the master, so the
+                    # archive is missing audio that may only exist in these
+                    # WAVs. Keep them for a person to look at.
+                    kept += 1
+                    log.warning("keeping %s: a segment failed to concatenate", entry.name)
+                elif lec is not None and _reverify(lec):
                     size = sum(p.stat().st_size for p in entry.glob("*") if p.is_file())
                     purged += _purge_work_dir(entry)
                     freed += size

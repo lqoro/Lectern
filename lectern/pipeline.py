@@ -123,9 +123,18 @@ class Pipeline:
     def _run_notes(self, job: Job) -> None:
         try:
             lec = Lecture.load(job.lecture_id)
+            prior = lec.manifest().get("state") or "complete"
             self._set(job, "waiting", 0, "waiting for a free processing slot")
             with STAGE_LOCK:
-                self._notes(job, lec)
+                try:
+                    self._notes(job, lec)
+                finally:
+                    # _notes marks the lecture "noting"; a regenerate must put
+                    # it back, or the UI (and startup recovery) treat it as
+                    # mid-processing forever. Re-load: it may have been moved.
+                    lec = Lecture.load(job.lecture_id)
+                    if lec.manifest().get("state") == "noting":
+                        lec.set_state(prior if prior != "noting" else "complete")
             self._set(job, "complete", 100, "notes updated")
         except Exception as e:
             with self._lock:

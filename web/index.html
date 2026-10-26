@@ -29,6 +29,10 @@
   <button id="importBtn" class="ghost" title="Transcribe a downloaded lecture video or audio file">Import</button>
   <button id="newBtn" class="primary">Record a lecture</button>
 </header>
+<div id="modelBanner" class="banner hidden" role="status">
+  <span>Before your first lecture, download a speech model — it turns the audio into text.</span>
+  <button id="modelBannerBtn" class="primary tiny">Choose a model</button>
+</div>
 
 <main id="main">
   <!-- LIBRARY -->
@@ -195,6 +199,7 @@
     <h4>Help</h4>
     <p class="hint">Copy system details to paste into a bug report. Nothing is sent
     anywhere; no lecture content is included.</p>
+    <p class="links" id="helpLinks"></p>
     <menu>
       <button type="button" id="diagBtn">Copy diagnostics</button>
       <button type="button" class="primary" data-close>Done</button>

@@ -15,6 +15,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +26,10 @@ from . import platform_compat as pc
 
 SCHEMA = 1
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
+
+# Every read-modify-write of a lecture.json goes through this lock, so a
+# rename from the UI can't drop fields the pipeline just wrote (or vice versa).
+_MANIFEST_LOCK = threading.RLock()
 
 # Ordered lifecycle. `state` in lecture.json is always one of these.
 STATES = ("recording", "importing", "paused", "interrupted", "concatenating", "transcribing",
@@ -195,11 +201,16 @@ class Lecture:
         folder = clean_folder(folder)
         root = (config.LECTURES_ROOT / folder) if folder else config.LECTURES_ROOT
         root.mkdir(parents=True, exist_ok=True)
-        path = root / base
-        n = 2
-        while path.exists():
-            path = root / f"{base}-{n}"
+        # The id (directory name) must be unique across ALL class folders,
+        # because Lecture.load finds a lecture by id alone.
+        taken = {p.name for p in config.LECTURES_ROOT.iterdir()}
+        for d in _folder_dirs():
+            taken.update(p.name for p in d.iterdir())
+        name, n = base, 2
+        while name in taken:
+            name = f"{base}-{n}"
             n += 1
+        path = root / name
         path.mkdir(parents=True)
         (path / ".work").mkdir()
         (path / ".work" / ".metadata_never_index").touch()
@@ -249,6 +260,10 @@ class Lecture:
             dest = config.TRASH_DIR / f"{self.path.name}-{n}"
             n += 1
         self.path.rename(dest)
+        # rename keeps the old mtime, and the 7-day sweep ages entries by
+        # mtime: without this a 3-week-old lecture is purged on next start.
+        now = time.time()
+        os.utime(dest, (now, now))
         self.path = dest
         return dest
 
@@ -276,18 +291,20 @@ class Lecture:
         atomic_write_json(self.manifest_path, m, durable=durable, indent=2, mkdirs=False)
 
     def update(self, **fields) -> dict:
-        m = self.manifest()
-        m.update(fields)
-        self.write_manifest(m)
-        return m
+        with _MANIFEST_LOCK:
+            m = self.manifest()
+            m.update(fields)
+            self.write_manifest(m)
+            return m
 
     def set_state(self, state: str, **extra) -> dict:
         assert state in STATES, state
-        m = self.manifest()
-        m["state"] = state
-        m.setdefault("stage_history", []).append({"s": state, "at": utcnow()})
-        m.update(extra)
-        self.write_manifest(m)
+        with _MANIFEST_LOCK:
+            m = self.manifest()
+            m["state"] = state
+            m.setdefault("stage_history", []).append({"s": state, "at": utcnow()})
+            m.update(extra)
+            self.write_manifest(m)
         self.set_stage(state)
         return m
 

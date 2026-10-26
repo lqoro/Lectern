@@ -138,6 +138,7 @@ class Supervise(unittest.TestCase):
         dev = mock.Mock()
         dev.name, dev.index = "USB Mic", 0
         with mock.patch.object(recorder.audio, "resolve_device", lambda fresh=True: dev), \
+             mock.patch.object(recorder, "_require_capture_helper", lambda: None), \
              mock.patch.object(recorder.subprocess, "Popen", side_effect=OSError("gone")):
             with self.assertRaises(OSError):
                 recorder.Recorder().start("boom", skip_probe=True)

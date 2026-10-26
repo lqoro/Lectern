@@ -103,8 +103,10 @@ def access_token() -> str:
     except OSError:
         pass
     tok = secrets.token_urlsafe(18)
-    TOKEN_FILE.write_text(tok)
-    TOKEN_FILE.chmod(0o600)
+    # Created 0600 from the start, never briefly world-readable.
+    fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(tok)
     return tok
 
 

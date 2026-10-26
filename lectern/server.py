@@ -34,6 +34,33 @@ app.json.sort_keys = False
 COOKIE = "lectern_key"
 
 
+_LOOPBACK_NAMES = ("127.0.0.1", "localhost", "[::1]")
+_LOOPBACK_HOSTS = {*_LOOPBACK_NAMES, *(f"{h}:{config.PORT}" for h in _LOOPBACK_NAMES)}
+
+
+@app.before_request
+def same_origin_only():
+    """Stop other websites from driving this server.
+
+    A page on any site can send a "simple" POST to 127.0.0.1 without a CORS
+    preflight (e.g. start the microphone), and DNS rebinding can point an
+    attacker's hostname at us to read lectures. So on loopback the Host must be
+    ours, and anything that changes state must come from our own origin.
+    """
+    host = (request.host or "").lower()
+    if config.is_loopback_only() and host not in _LOOPBACK_HOSTS:
+        return Response("Forbidden host.\n", status=403, mimetype="text/plain")
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("Origin")
+        if origin and origin.lower() not in (f"http://{host}", f"https://{host}"):
+            return Response("Cross-site request refused.\n", status=403,
+                            mimetype="text/plain")
+        if not origin and request.headers.get("Sec-Fetch-Site") == "cross-site":
+            return Response("Cross-site request refused.\n", status=403,
+                            mimetype="text/plain")
+    return None
+
+
 @app.before_request
 def require_token():
     """No-op on loopback. On a LAN bind, every request must carry the token."""
@@ -42,7 +69,7 @@ def require_token():
     tok = config.access_token()
     given = (request.args.get("k") or request.headers.get("X-Lectern-Token")
              or request.cookies.get(COOKIE) or "")
-    if secrets.compare_digest(given, tok):
+    if secrets.compare_digest(given.encode(), tok.encode()):
         return None
     return Response(
         "Lectern is running in network mode. Open the link shown in the "
@@ -55,10 +82,17 @@ def set_token_cookie(resp):
     """Remember a valid ?k= so the phone does not need it on every request."""
     if not config.is_loopback_only():
         if request.args.get("k") and secrets.compare_digest(
-                request.args.get("k"), config.access_token()):
+                request.args.get("k").encode(), config.access_token().encode()):
             resp.set_cookie(COOKIE, config.access_token(), max_age=90 * 86400,
                             samesite="Lax", httponly=True)
     return resp
+
+
+def _json_body() -> dict:
+    """The JSON request body as a dict; anything else (an array, a string,
+    invalid JSON) reads as empty instead of crashing the handler."""
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
 
 
 # ------------------------------------------------------------------ static
@@ -106,6 +140,9 @@ def api_status():
     st = RECORDER.status()
     st["free_bytes"] = storage.free_bytes()
     st["jobs"] = PIPELINE.jobs()
+    # A first-run user has no speech model yet; the UI says so up front
+    # instead of letting them record a whole lecture that cannot transcribe.
+    st["needs_model"] = models.active_path() is None
     return jsonify(st)
 
 
@@ -135,7 +172,7 @@ def api_preflight():
 
 @app.post("/api/record/start")
 def api_record_start():
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     title = (body.get("title") or "").strip() or "Untitled lecture"
     course = (body.get("course") or "").strip()
     folder = (body.get("folder") or "").strip()
@@ -184,18 +221,25 @@ def api_import():
                 f.write(block)
                 got += len(block)
     except Exception as e:                 # disk error, or the client went away
+        part.unlink(missing_ok=True)       # don't keep a multi-GB partial file
         lec.set_state("failed", failure="the upload did not finish; import the file again")
         return jsonify({"error": f"upload failed: {e}"}), 400
     if got != length:
         # Never hand a truncated file to the pipeline.
+        part.unlink(missing_ok=True)
         lec.set_state("failed", failure="the upload did not finish; import the file again")
         return jsonify({"error": "the upload did not finish"}), 400
-    part.replace(importer.source_path(lec))
+    src = importer.source_path(lec)
+    part.replace(src)
     try:
-        importer.probe(importer.source_path(lec))
-    except importer.ImportError_ as e:
-        lec.set_state("failed", failure=str(e))
-        return jsonify({"error": str(e), "lecture_id": lec.id}), 415
+        importer.probe(src)
+    except Exception as e:
+        # Unreadable file, or ffprobe missing: release the upload and leave a
+        # failed (deletable) lecture, never one stuck in "importing".
+        src.unlink(missing_ok=True)
+        msg = str(e) if isinstance(e, importer.ImportError_) else f"could not read the file: {e}"
+        lec.set_state("failed", failure=msg)
+        return jsonify({"error": msg, "lecture_id": lec.id}), 415
     with _MOVE_LOCK:
         job = PIPELINE.submit_import(lec.id)
     return jsonify({"lecture_id": lec.id, "job": job})
@@ -222,7 +266,7 @@ def api_record_pause():
 
 @app.post("/api/record/resume")
 def api_record_resume():
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     lecture_id = (body.get("lecture_id") or "").strip()
     if not lecture_id:
         return jsonify({"error": "lecture_id is required"}), 400
@@ -253,8 +297,10 @@ def api_system():
 
 @app.post("/api/models/select")
 def api_model_select():
-    body = request.get_json(silent=True) or {}
-    mid = body.get("id")
+    body = request.get_json(silent=True)
+    mid = body.get("id") if isinstance(body, dict) else None
+    if mid is not None and not isinstance(mid, str):
+        return jsonify({"error": "unknown model"}), 404
     if mid is None:                       # clear the choice: back to automatic
         models.save_settings(whisper_model=None)
     elif mid not in models.BY_ID:
@@ -269,9 +315,10 @@ def api_model_select():
 @app.post("/api/models/download")
 def api_model_download():
     """Download is always an explicit user action; Lectern never fetches on its own."""
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
+    mid = body.get("id") if isinstance(body, dict) else ""
     try:
-        return jsonify(models.DOWNLOADER.start(body.get("id") or ""))
+        return jsonify(models.DOWNLOADER.start(mid if isinstance(mid, str) else ""))
     except KeyError:
         return jsonify({"error": "unknown model"}), 404
 
@@ -407,7 +454,7 @@ def api_download(lecture_id: str, kind: str):
 @app.patch("/api/lecture/<lecture_id>")
 def api_patch(lecture_id: str):
     lec = _load(lecture_id)
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     fields = {}
     for k in ("title", "course"):
         if isinstance(body.get(k), str):
@@ -447,7 +494,7 @@ def api_folders():
 
 @app.post("/api/folders")
 def api_folder_create():
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     try:
         return jsonify({"name": storage.create_folder(body.get("name") or "")})
     except ValueError as e:
@@ -458,7 +505,7 @@ def api_folder_create():
 
 @app.patch("/api/folders/<path:name>")
 def api_folder_rename(name: str):
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     try:
         old = storage.clean_folder(name)
         with _MOVE_LOCK:
@@ -498,7 +545,7 @@ def api_lecture_move(lecture_id: str):
     it is recording or processing the move is queued and applied as soon as
     nothing is writing into it (the response says "deferred")."""
     lec = _load(lecture_id)
-    body = request.get_json(silent=True) or {}
+    body = _json_body()
     folder = storage.clean_folder(body.get("folder") or "")
     try:
         with _MOVE_LOCK:

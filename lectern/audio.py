@@ -54,6 +54,12 @@ class PreflightError(RuntimeError):
         self.detail = detail
 
 
+def _ffmpeg_missing() -> PreflightError:
+    return PreflightError(
+        "ffmpeg_missing", "ffmpeg is not installed.",
+        "On a Mac: brew install ffmpeg (or run ./install.sh), then restart Lectern.")
+
+
 # Enumeration is slow and variable: measured 4.96 s on the first call in a fresh
 # process and ~1 s warm, because avfoundation probes Continuity devices. It is
 # also called on both preflight and record-start, so results are cached briefly.
@@ -82,6 +88,8 @@ def list_audio_devices(timeout: float = _ENUM_TIMEOUT,
              "-list_devices", "true", "-i", ""],
             capture_output=True, text=True, timeout=timeout,
         )
+    except FileNotFoundError:
+        raise _ffmpeg_missing() from None
     except subprocess.TimeoutExpired as e:
         raise PreflightError(
             "device_error",
@@ -180,14 +188,22 @@ def probe(device: Device, seconds: float = 1.8) -> dict:
         return _probe_portable(device, seconds)
     with tempfile.TemporaryDirectory(prefix="lectern-probe-") as td:
         wav = Path(td) / "probe.wav"
-        proc = subprocess.run(
-            [config.FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "warning",
-             "-f", "avfoundation", "-i", f":{device.index}",
-             "-ac", str(config.CHANNELS), "-ar", str(config.SAMPLE_RATE),
-             "-c:a", "pcm_s16le", "-fflags", "+bitexact",
-             "-t", str(seconds), "-y", str(wav)],
-            capture_output=True, text=True, timeout=seconds + 25,
-        )
+        try:
+            proc = subprocess.run(
+                [config.FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "warning",
+                 "-f", "avfoundation", "-i", f":{device.index}",
+                 "-ac", str(config.CHANNELS), "-ar", str(config.SAMPLE_RATE),
+                 "-c:a", "pcm_s16le", "-fflags", "+bitexact",
+                 "-t", str(seconds), "-y", str(wav)],
+                capture_output=True, text=True, errors="replace",
+                timeout=seconds + 25,
+            )
+        except FileNotFoundError:
+            raise _ffmpeg_missing() from None
+        except subprocess.TimeoutExpired as e:
+            raise PreflightError(
+                "device_error", "The microphone did not respond.",
+                "avfoundation hung while opening the device.") from e
         stderr = proc.stderr or ""
         if proc.returncode != 0 or not wav.exists() or wav.stat().st_size <= 44:
             kind, msg = _classify_open_failure(stderr)

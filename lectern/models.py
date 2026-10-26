@@ -78,9 +78,10 @@ BY_ID = {m.id: m for m in CATALOG}
 # --------------------------------------------------------------- settings
 def load_settings() -> dict:
     try:
-        return json.loads(SETTINGS_FILE.read_text())
+        data = json.loads(SETTINGS_FILE.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def save_settings(**fields) -> dict:
@@ -262,7 +263,8 @@ class Downloader:
         try:
             resp = urllib.request.urlopen(req, timeout=30)
         except urllib.error.HTTPError as e:
-            if e.code == 416 and have:           # already complete
+            if e.code == 416 and have:           # already complete?
+                _check_model_file(part, model)
                 part.replace(dest)
                 return
             raise DownloadError(f"download refused: HTTP {e.code}") from e
@@ -293,7 +295,27 @@ class Downloader:
         if have != total:
             raise DownloadError(
                 f"download incomplete ({have} of {total} bytes); run it again to resume")
+        _check_model_file(part, model)
         part.replace(dest)
+
+
+_GGML_MAGIC = b"lmgg"            # whisper.cpp model files start with this
+_SIZE_TOLERANCE = 0.05
+
+
+def _check_model_file(path: Path, model: Model) -> None:
+    """Refuse to install something that is not this model, e.g. a captive
+    portal's HTML page or a corrupt partial file. The partial file is removed
+    so the next attempt starts clean."""
+    size = path.stat().st_size
+    expected = model.size_mb * _MB
+    with open(path, "rb") as f:
+        magic = f.read(4)
+    if magic != _GGML_MAGIC or abs(size - expected) > expected * _SIZE_TOLERANCE:
+        path.unlink(missing_ok=True)
+        raise DownloadError(
+            "the downloaded file is not a valid speech model (a Wi-Fi login page "
+            "or a network error?). Try again on a working connection.")
 
 
 def hardware_free(path: Path) -> int | None:

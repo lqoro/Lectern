@@ -1087,6 +1087,7 @@ let lastStopSeen = null;
 async function poll() {
   let s;
   try { s = await api("/api/status"); } catch { return setTimeout(poll, 3000); }
+  $("modelBanner").classList.toggle("hidden", !s.needs_model);
   const pill = $("recPill");
   recActive = !!s.recording;
   recLectureId = s.lecture_id || null;
@@ -1187,8 +1188,25 @@ async function loadSettings() {
 }
 
 $("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); };
+$("modelBannerBtn").onclick = () => $("settingsBtn").click();
 $("settingsDlg").addEventListener("close", () => clearTimeout(dlTimer));
 $("dlCancel").onclick = async () => { await jpost("/api/models/download/cancel"); setTimeout(loadSettings, 500); };
+
+// Plain link-outs; they open in the browser and send nothing by themselves.
+// An empty URL hides its link (e.g. donations until the page exists).
+const REPO = "https://github.com/lqoro/Lectern";
+const HELP_LINKS = [
+  ["Report a bug", `${REPO}/issues/new?template=bug.yml`],
+  ["Request a feature", `${REPO}/issues/new?template=feature.yml`],
+  ["Source code", REPO],
+  ["Donate", ""],
+];
+for (const [label, href] of HELP_LINKS) {
+  if (!href) continue;
+  const a = el("a", "", label);
+  a.href = href; a.target = "_blank"; a.rel = "noopener";
+  $("helpLinks").append(a);
+}
 
 $("diagBtn").onclick = async () => {
   try {

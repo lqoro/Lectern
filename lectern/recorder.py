@@ -119,6 +119,24 @@ class RecordingState:
                               # the log spans every session of the lecture
 
 
+
+def _require_capture_helper() -> None:
+    """On macOS, refuse to record without the sample-exact Swift helper.
+
+    The ffmpeg avfoundation fallback is measured to drop about two thirds of
+    the audio, so a first-run user who presses Record while the helper is
+    still compiling must wait for it, not silently lose the lecture.
+    LECTERN_ALLOW_FFMPEG_CAPTURE=1 keeps the old fallback for debugging.
+    """
+    if capture.portable() or os.environ.get("LECTERN_ALLOW_FFMPEG_CAPTURE") == "1":
+        return
+    if capture.available() is not None or capture.ensure_built() is not None:
+        return
+    raise audio.PreflightError(
+        "helper_unavailable",
+        "The microphone helper could not be built. Install Apple's command line "
+        "tools (run: xcode-select --install), then restart Lectern.")
+
 class RecorderBusy(RuntimeError):
     pass
 
@@ -220,16 +238,17 @@ class Recorder:
             if not skip_probe:
                 audio.probe(device)          # raises PreflightError with a kind
 
+            _require_capture_helper()        # before anything is created
+
             lec = Lecture.create(title=title, course=course, folder=folder)
             log_offset = _size(lec.work / "record.stderr.log")
-            log = open(lec.work / "record.stderr.log", "ab", buffering=0)
-            argv = self._argv(lec, device)
-
             try:
-                proc = subprocess.Popen(
-                    argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=log, text=True, bufsize=1, **pc.detached_popen_kwargs(),
-                )
+                argv = self._argv(lec, device)
+                with open(lec.work / "record.stderr.log", "ab", buffering=0) as errlog:
+                    proc = subprocess.Popen(
+                        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=errlog, text=True, bufsize=1, **pc.detached_popen_kwargs(),
+                    )
             except Exception:
                 # No writer ever ran: never leave it "recording" (that would
                 # also keep it busy, so it could not be moved, until a restart).
@@ -499,7 +518,13 @@ class Recorder:
                 proc.kill()
             except ProcessLookupError:
                 pass
-            proc.wait(timeout=5)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # Unkillable (e.g. stuck in the audio driver). Don't raise:
+                # the caller must still finish, or the recorder stays "active"
+                # until a restart. Recovery adopts or cleans it up later.
+                log.error("capture process %s did not exit after SIGKILL", proc.pid)
 
     def stop(self, reason: str = "user") -> dict:
         with self._lock:
@@ -574,6 +599,8 @@ class Recorder:
                 raise RuntimeError(
                     f"this lecture cannot be resumed from its current state ({state!r})")
 
+            _require_capture_helper()
+
             lec.work.mkdir(parents=True, exist_ok=True)
             next_index = self._seed_from_archive_if_needed(lec)
             base_ms = sum(concat.wav_duration_ms(p) for p in lec.segments())
@@ -584,11 +611,11 @@ class Recorder:
 
             argv = self._argv(lec, device, start_number=next_index)
             log_offset = _size(lec.work / "record.stderr.log")
-            log = open(lec.work / "record.stderr.log", "ab", buffering=0)
-            proc = subprocess.Popen(
-                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=log, text=True, bufsize=1, **pc.detached_popen_kwargs(),
-            )
+            with open(lec.work / "record.stderr.log", "ab", buffering=0) as errlog:
+                proc = subprocess.Popen(
+                    argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=errlog, text=True, bufsize=1, **pc.detached_popen_kwargs(),
+                )
 
             storage.atomic_write_json(lec.work / "recording.json", {
                 "pid": proc.pid,
@@ -627,12 +654,19 @@ class Recorder:
         if not lec.archive_path.is_file():
             return 0                      # nothing recorded yet either way
         seed = lec.work / "seg-000000.wav"
-        subprocess.run(
-            [config.FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-y", "-i", str(lec.archive_path), "-ac", str(config.CHANNELS),
-             "-ar", str(config.SAMPLE_RATE), "-c:a", "pcm_s16le",
-             "-fflags", "+bitexact", str(seed)],
-            check=True, timeout=3600)
+        # Decode to a side file and rename only on success: a truncated seed
+        # left by a failed decode would be re-archived over the full audio.
+        part = seed.with_name(seed.name + ".part")
+        try:
+            subprocess.run(
+                [config.FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
+                 "-y", "-i", str(lec.archive_path), "-ac", str(config.CHANNELS),
+                 "-ar", str(config.SAMPLE_RATE), "-c:a", "pcm_s16le",
+                 "-fflags", "+bitexact", "-f", "wav", str(part)],
+                check=True, timeout=3600)
+            os.replace(part, seed)
+        finally:
+            part.unlink(missing_ok=True)
         return 1
 
     def _finish_locked(self, reason: str) -> None:

@@ -110,7 +110,8 @@ class Download(unittest.TestCase):
     def test_download_and_resume(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)
-        url = self.serve(b"x" * 78_000_000)
+        size = 32_000_000                      # tiny.en q5_1 catalogue size
+        url = self.serve(b"lmgg" + b"x" * (size - 4))
         m = fresh_modules(tmp, LECTERN_MODEL_BASE_URL=url,
                           LECTERN_MODEL_DIR=str(Path(tmp) / "models"))
         m.LEGACY_DIR = Path(tmp) / "legacy"
@@ -118,12 +119,12 @@ class Download(unittest.TestCase):
         tiny = m.BY_ID["tiny.en"]
         # a previous interrupted attempt left the first 30 MB behind
         m.MODELS_DIR.mkdir(parents=True)
-        (m.MODELS_DIR / (tiny.file + ".part")).write_bytes(b"x" * 30_000_000)
+        (m.MODELS_DIR / (tiny.file + ".part")).write_bytes(b"lmgg" + b"x" * 29_999_996)
         m.DOWNLOADER.start("tiny.en")
         st = self.wait(m.DOWNLOADER)
         self.assertEqual(st.get("error"), "")
         self.assertTrue(st.get("done"))
-        self.assertEqual((m.MODELS_DIR / tiny.file).stat().st_size, 78_000_000)
+        self.assertEqual((m.MODELS_DIR / tiny.file).stat().st_size, size)
         self.assertFalse((m.MODELS_DIR / (tiny.file + ".part")).exists())
         self.assertIsNotNone(m.installed_path(tiny))
 

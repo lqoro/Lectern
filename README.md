@@ -1,12 +1,39 @@
 # Lectern
 
 On-device lecture recorder, transcriber and click-to-jump player.
-Everything runs locally on this Mac — no cloud, no API keys, no account.
+Everything runs locally on your Mac — no cloud, no API keys, no account.
+Free and open source (MIT).
+
+**Status (v0.1.0):** tested on Apple Silicon Macs. Windows and Linux are
+experimental (see below). It is a local web app you start from a script, not a
+signed `.app` yet.
+
+## Install (macOS)
+
+You need [Homebrew](https://brew.sh). Then:
+
+```bash
+git clone https://github.com/lqoro/Lectern.git
+cd Lectern
+./install.sh            # whisper.cpp, ffmpeg, Python env
+./install.sh --notes    # optional: AI study notes via Ollama (~2 GB, best with 8 GB+ RAM)
+```
+
+Or download the source zip from the
+[latest release](https://github.com/lqoro/Lectern/releases/latest), unzip it,
+and run `./install.sh` inside the folder. If macOS blocks a script, right-click
+it ▸ **Open**.
+
+On first launch open **Settings (⚙)** and download the speech model it
+recommends for your computer (32 MB – 1 GB). Nothing is downloaded until you
+press that button. The microphone helper is compiled on first start with the
+Xcode Command Line Tools that Homebrew installs; macOS will ask for microphone
+permission the first time you record.
 
 ## Run it
 
 ```bash
-~/lectern/Lectern.command
+./Lectern.command
 ```
 
 Double-clicking that file in Finder works too. It starts the backend if it isn't
@@ -19,7 +46,7 @@ Chrome/Edge: **⋮ ▸ Cast, save and share ▸ Install page as app**.
 **On your iPhone**, same wifi:
 
 ```bash
-~/lectern/Lectern-on-Phone.command
+./Lectern-on-Phone.command
 ```
 
 It prints a link containing an access key. Open it on the phone, then
@@ -268,3 +295,18 @@ aid, not a source of truth. Click through to the audio when a detail matters.
 ## Still to come
 
 - **M4** — full-text search across every lecture, and autostart at login.
+
+## Help, bugs and ideas
+
+- **Bug?** [Open a bug report](https://github.com/lqoro/Lectern/issues/new?template=bug.yml).
+  Settings (⚙) ▸ **Copy diagnostics** puts system details (no lecture content)
+  on your clipboard to paste in. Nothing is ever sent automatically.
+- **Idea?** [Request a feature](https://github.com/lqoro/Lectern/issues/new?template=feature.yml).
+- Pull requests welcome. Run the tests with `python -m unittest discover -s tests`.
+
+## Third-party software
+
+Lectern calls these tools; they are installed separately and keep their own
+licences: [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and the Whisper
+model weights (MIT), [FFmpeg](https://ffmpeg.org) (LGPL/GPL, via Homebrew),
+[Ollama](https://ollama.com) (MIT, optional), Flask and Waitress (BSD/ZPL).

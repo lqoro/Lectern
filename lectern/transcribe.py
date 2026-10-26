@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -77,25 +78,56 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None) -> Path:
     # browser and, worse, the recorder of the NEXT lecture, which drops audio.
     # Priority is inherited, so it is set on the child, never on the backend.
     argv, extra = pc.low_priority(argv)
-    proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.PIPE, text=True, bufsize=1, **extra)
+    try:
+        proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True, errors="replace",
+                                bufsize=1, **extra)
+    except FileNotFoundError:
+        raise TranscriptionError(
+            "whisper-cli is not installed (on a Mac: brew install whisper-cpp)") from None
+    # A hung whisper (GPU stall) holds the stage lock and would block every
+    # later lecture forever, so it gets a generous deadline and is killed.
+    deadline_s = _whisper_deadline_s(wav)
+    timer = threading.Timer(deadline_s, proc.kill)
+    timer.daemon = True
+    timer.start()
     tail: list[str] = []
-    for line in proc.stderr:                       # type: ignore[union-attr]
-        tail.append(line)
-        del tail[:-40]
-        if progress_cb:
-            m = re.search(r"progress\s*=\s*(\d+)%", line)
-            if m:
-                try:
-                    progress_cb(int(m.group(1)))
-                except Exception:
-                    pass
-    rc = proc.wait()
+    try:
+        for line in proc.stderr:                   # type: ignore[union-attr]
+            tail.append(line)
+            del tail[:-40]
+            if progress_cb:
+                m = re.search(r"progress\s*=\s*(\d+)%", line)
+                if m:
+                    try:
+                        progress_cb(int(m.group(1)))
+                    except Exception:
+                        pass
+        rc = proc.wait()
+    finally:
+        timer.cancel()
+        if proc.poll() is None:                    # never leave an orphan
+            proc.kill()
+            proc.wait()
     out = Path(str(out_prefix) + ".json")
     if rc != 0 or not out.is_file():
-        raise TranscriptionError(
-            f"whisper-cli exited {rc}\n" + "".join(tail)[-1500:])
+        why = (f"whisper-cli took longer than {deadline_s / 60:.0f} min and was stopped"
+               if rc in (-9, 137) else f"whisper-cli exited {rc}")
+        raise TranscriptionError(why + "\n" + "".join(tail)[-1500:])
     return out
+
+
+_WAV_BYTES_PER_S = 32_000            # 16 kHz mono s16le
+_DEADLINE_FLOOR_S = 20 * 60
+_DEADLINE_X_REALTIME = 4             # slowest CPU model measured ~1.2x real time
+
+
+def _whisper_deadline_s(wav: Path) -> float:
+    try:
+        dur = wav.stat().st_size / _WAV_BYTES_PER_S
+    except OSError:
+        dur = 0.0
+    return _DEADLINE_FLOOR_S + dur * _DEADLINE_X_REALTIME
 
 
 def normalize(raw_json: Path, duration_ms: int) -> dict:

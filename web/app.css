@@ -60,6 +60,9 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
   border:1px solid var(--line);color:var(--muted);margin-left:6px}
 .badge.work{background:var(--accent-soft);color:var(--accent);border-color:transparent}
 .badge.warn{background:#fff2cc;color:#7a5a00;border-color:transparent}
+.banner{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px 14px;
+  padding:9px 18px;background:var(--accent-soft);color:var(--ink);font-size:13px;
+  border-bottom:1px solid var(--line)}
 .empty{text-align:center;color:var(--muted);margin-top:16vh}
 .empty h2{color:var(--ink);margin-bottom:6px}
 
@@ -294,4 +297,7 @@ button.tiny{padding:2px 8px;font-size:11.5px}
 .models .tag{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:1px 7px;
   color:var(--muted);margin-left:6px;font-weight:400}
 .hint.err{color:var(--danger)}
+.links{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 0 0;font-size:13px}
+.links a{color:var(--accent)}
+.links a:focus-visible{outline:2px solid currentColor;outline-offset:2px;border-radius:3px}
 #settingsBtn{font-size:18px;line-height:1;padding:4px 8px}

@@ -34,11 +34,16 @@ def source_path(lec: Lecture) -> Path:
 
 def probe(path: Path) -> dict:
     """Duration and audio-stream check. Raises ImportError_ with a plain message."""
-    proc = subprocess.run(
-        [config.FFPROBE, "-v", "error", "-select_streams", "a",
-         "-show_entries", "stream=codec_name:format=duration,format_name",
-         "-of", "json", str(path)],
-        capture_output=True, text=True, timeout=120)
+    try:
+        proc = subprocess.run(
+            [config.FFPROBE, "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_name:format=duration,format_name",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, errors="replace", timeout=120)
+    except FileNotFoundError:
+        raise ImportError_("ffprobe is not installed (on a Mac: brew install ffmpeg)") from None
+    except subprocess.TimeoutExpired:
+        raise ImportError_("reading this file took too long; is it a valid audio or video file?") from None
     if proc.returncode != 0:
         raise ImportError_("this file could not be read as audio or video")
     try:
