@@ -134,6 +134,7 @@ class QuickRecord(Base):
             calls.update(title=title, skip_probe=skip_probe)
             return {"recording": True, "lecture_id": "x"}
 
+        self.client.post("/api/notice")          # recording notice read once
         with mock.patch.object(self.server.RECORDER, "status", lambda: {"recording": False}), \
              mock.patch.object(self.server.RECORDER, "start", start):
             r = self.client.post("/api/record/toggle")
@@ -211,3 +212,32 @@ class Recommendation(Base):
     def test_device_never_includes_serial_numbers(self):
         hardware = importlib.import_module("lectern.hardware")
         self.assertEqual(set(hardware.device()), {"name", "chip"})
+
+
+class LegalAndNotice(Base):
+    def setUp(self):
+        super().setUp()
+        self.server = importlib.import_module("lectern.server")
+        self.client = self.server.app.test_client()
+
+    def test_legal_documents_are_served(self):
+        for doc, needle in (("terms", "not legal advice"), ("privacy", "collects nothing"),
+                            ("notices", "Qwen Research License"), ("license", "MIT License")):
+            r = self.client.get(f"/api/legal/{doc}")
+            self.assertEqual(r.status_code, 200, doc)
+            self.assertIn(needle, r.get_data(as_text=True), doc)
+        self.assertEqual(self.client.get("/api/legal/..%2Fsecret").status_code, 404)
+
+    def test_quick_record_waits_for_the_recording_notice(self):
+        started = []
+        with mock.patch.object(self.server.RECORDER, "status", lambda: {"recording": False}), \
+             mock.patch.object(self.server.RECORDER, "start",
+                               lambda *a, **k: started.append(1) or {"recording": True}):
+            self.assertFalse(self.client.get("/api/notice").get_json()["accepted"])
+            r = self.client.post("/api/record/toggle")
+            self.assertEqual((r.status_code, r.get_json()["kind"]), (409, "notice"))
+            self.assertEqual(started, [])
+            self.client.post("/api/notice")
+            self.assertTrue(self.client.get("/api/notice").get_json()["accepted"])
+            self.assertEqual(self.client.post("/api/record/toggle").status_code, 200)
+            self.assertEqual(started, [1])

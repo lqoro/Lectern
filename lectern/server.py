@@ -257,6 +257,38 @@ def api_record_stop():
     return jsonify(res)
 
 
+# ------------------------------------------------------------ legal
+REPO_DIR = WEB_DIR.parent
+LEGAL_DOCS = {"license": "LICENSE", "notices": "THIRD_PARTY_NOTICES.md",
+              "privacy": "PRIVACY.md", "terms": "TERMS.md"}
+# Bump when the first-run recording notice changes materially, so people
+# see the new text once.
+NOTICE_VERSION = "1"
+
+
+def notice_accepted() -> bool:
+    return models.load_settings().get("notice_accepted") == NOTICE_VERSION
+
+
+@app.get("/api/legal/<doc>")
+def api_legal(doc: str):
+    name = LEGAL_DOCS.get(doc)
+    if not name:
+        abort(404)
+    return send_from_directory(REPO_DIR, name, mimetype="text/plain; charset=utf-8")
+
+
+@app.get("/api/notice")
+def api_notice_get():
+    return jsonify({"accepted": notice_accepted(), "version": NOTICE_VERSION})
+
+
+@app.post("/api/notice")
+def api_notice_accept():
+    models.save_settings(notice_accepted=NOTICE_VERSION)
+    return jsonify({"accepted": True, "version": NOTICE_VERSION})
+
+
 def quick_title(now: datetime | None = None) -> str:
     """Auto title for a one-key recording: start date and time, e.g. "102626 2:05 PM"."""
     now = now or datetime.now()
@@ -274,6 +306,11 @@ def api_record_toggle():
         if isinstance(resp, tuple):
             return resp
         return jsonify({**resp.get_json(), "action": "stopped"})
+    if not notice_accepted():
+        # The menu bar can start a recording without the app ever being
+        # opened; the recording-law notice must have been read first.
+        return jsonify({"error": "Open Lectern once to read the recording notice first.",
+                        "kind": "notice"}), 409
     try:
         with _MOVE_LOCK:
             st = RECORDER.start(quick_title(), "", folder="", skip_probe=True)

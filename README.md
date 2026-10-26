@@ -16,7 +16,7 @@ You need [Homebrew](https://brew.sh). Then:
 git clone https://github.com/lqoro/Lectern.git
 cd Lectern
 ./install.sh            # whisper.cpp, ffmpeg, Python env
-./install.sh --notes    # optional: AI study notes via Ollama (~2 GB, best with 8 GB+ RAM)
+./install.sh --notes    # optional: AI study notes via Ollama (~2 GB, best with 8 GB+ RAM; research-licence model)
 ```
 
 Or download the source zip from the
@@ -320,9 +320,16 @@ aid, not a source of truth. Click through to the audio when a detail matters.
 - **Idea?** [Request a feature](https://github.com/lqoro/Lectern/issues/new?template=feature.yml).
 - Pull requests welcome. Run the tests with `python -m unittest discover -s tests`.
 
-## Third-party software
+## Legal
 
-Lectern calls these tools; they are installed separately and keep their own
-licences: [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and the Whisper
-model weights (MIT), [FFmpeg](https://ffmpeg.org) (LGPL/GPL, via Homebrew),
-[Ollama](https://ollama.com) (MIT, optional), Flask and Waitress (BSD/ZPL).
+- [`TERMS.md`](TERMS.md) — terms of use and the **recording notice**: recording
+  laws differ by place, and many schools require permission to record. Lectern
+  shows this once before your first recording or import.
+- [`PRIVACY.md`](PRIVACY.md) — Lectern collects nothing; everything stays on
+  your computer.
+- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — licences of the tools
+  and models Lectern uses. Note that the optional notes model `qwen2.5:3b` is
+  licensed for research and evaluation use only.
+- [`LICENSE`](LICENSE) — Lectern is MIT-licensed.
+
+All four are also in the app under **Settings (⚙) ▸ Legal**.

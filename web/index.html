@@ -214,10 +214,48 @@
     anywhere; no lecture content is included.</p>
     <textarea id="diagText" class="diag hidden" readonly rows="8" aria-label="Diagnostics"></textarea>
     <p class="links" id="helpLinks"></p>
+    <h4>Legal</h4>
+    <p class="links">
+      <a href="#" data-legal="terms">Terms &amp; recording notice</a>
+      <a href="#" data-legal="privacy">Privacy</a>
+      <a href="#" data-legal="notices">Third-party licences</a>
+      <a href="#" data-legal="license">Lectern licence (MIT)</a>
+    </p>
     <menu>
       <button type="button" id="diagBtn">Copy diagnostics</button>
       <button type="button" class="primary" data-close>Done</button>
     </menu>
+  </div>
+</dialog>
+
+<dialog id="noticeDlg" aria-labelledby="noticeTitle">
+  <div class="set-wrap notice">
+    <h3 id="noticeTitle">Before you record</h3>
+    <p><b>Recording laws differ by place.</b> In some states and countries everyone being
+    recorded must agree to it. Others need only one person's consent.</p>
+    <p><b>Your school sets rules too.</b> Many classes don't allow recording without the
+    instructor's permission, unless it's an approved accommodation through disability
+    services. Lecture recordings and slides may be copyrighted.</p>
+    <ul>
+      <li>Check your school's policy and ask your instructor when in doubt.</li>
+      <li>Keep recordings for your own study; don't share them without permission.</li>
+      <li>Transcripts and AI notes can be wrong. Check anything important against the recording.</li>
+    </ul>
+    <p class="hint">Everything stays on this computer: no account, no tracking. This is
+    general information, not legal advice. Read the full
+    <a href="#" data-legal="terms">terms</a> and <a href="#" data-legal="privacy">privacy</a> notes.</p>
+    <menu>
+      <button type="button" class="ghost" id="noticeLater">Not now</button>
+      <button type="button" class="primary" id="noticeOk">I understand</button>
+    </menu>
+  </div>
+</dialog>
+
+<dialog id="legalDlg" aria-labelledby="legalTitle">
+  <div class="set-wrap">
+    <h3 id="legalTitle">Legal</h3>
+    <div id="legalText" class="legal-text"></div>
+    <menu><button type="button" class="primary" data-close>Close</button></menu>
   </div>
 </dialog>
 

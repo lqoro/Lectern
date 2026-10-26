@@ -876,7 +876,105 @@ $("fTitle").addEventListener("input", () => {
   if ($("fFolder").value !== want) { $("fFolder").value = want; syncFolderUi(); }
 });
 
+/* ------------------------------------------------- first-run notice */
+// The recording-law notice is shown once (per notice version) before the
+// first recording or import. "Not now" closes it; Record/Import ask again.
+let noticeOk = false;
+function showNotice() {
+  return new Promise((resolve) => {
+    const dlg = $("noticeDlg");
+    const done = (ok) => { dlg.close(); resolve(ok); };
+    $("noticeOk").onclick = async () => {
+      try { await jpost("/api/notice"); noticeOk = true; } catch (e) { toast(e.message); }
+      done(noticeOk);
+    };
+    $("noticeLater").onclick = () => done(false);
+    dlg.addEventListener("cancel", () => resolve(false), { once: true });
+    if (!dlg.open) dlg.showModal();
+  });
+}
+async function requireNotice() {
+  if (noticeOk) return true;
+  try { noticeOk = (await api("/api/notice")).accepted; } catch { /* ask anyway */ }
+  return noticeOk || showNotice();
+}
+
+// Tiny renderer for our own Markdown legal files: headings, paragraphs,
+// lists, **bold**, `code` and [links](url). Builds DOM nodes (no innerHTML);
+// tables and anything else stay as preformatted text.
+function inlineMd(text) {
+  const frag = document.createDocumentFragment();
+  const re = /\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    frag.append(text.slice(last, m.index));
+    if (m[1] != null) frag.append(el("b", "", m[1]));
+    else if (m[2] != null) frag.append(el("code", "", m[2]));
+    else if (/^https?:\/\//.test(m[4])) {
+      const a = el("a", "", m[3]); a.href = m[4]; a.target = "_blank"; a.rel = "noopener";
+      frag.append(a);
+    } else frag.append(m[3]);
+    last = re.lastIndex;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+function renderMd(md) {
+  const out = document.createDocumentFragment();
+  for (const block of md.replace(/\r/g, "").split(/\n\s*\n/)) {
+    const lines = block.split("\n").filter((l) => l.trim());
+    if (!lines.length) continue;
+    const h = /^(#{1,3})\s+(.*)$/.exec(lines[0]);
+    if (h && lines.length === 1) { out.append(el(h[1].length === 1 ? "h3" : "h4", "", h[2])); continue; }
+    if (lines[0].startsWith("|")) {
+      const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      const table = el("table");
+      lines.filter((l) => !/^\|?\s*:?-{3,}/.test(l)).forEach((l, i) => {
+        const tr = el("tr");
+        for (const c of cells(l)) { const td = el(i === 0 ? "th" : "td"); td.append(inlineMd(c)); tr.append(td); }
+        table.append(tr);
+      });
+      out.append(table);
+      continue;
+    }
+    if (/^\s*-\s/.test(lines[0])) {
+      const ul = el("ul");
+      let li = null;
+      for (const l of lines) {
+        if (/^\s*-\s/.test(l)) { li = el("li"); ul.append(li); li.append(inlineMd(l.replace(/^\s*-\s+/, ""))); }
+        else if (li) li.append(" ", inlineMd(l.trim()));
+      }
+      out.append(ul);
+      continue;
+    }
+    const p = el("p");
+    p.append(inlineMd(lines.map((l) => l.trim()).join(" ")));
+    out.append(p);
+  }
+  return out;
+}
+
+async function showLegal(doc) {
+  const titles = { terms: "Terms & recording notice", privacy: "Privacy",
+                   notices: "Third-party licences", license: "Lectern licence" };
+  try {
+    const r = await fetch(`/api/legal/${doc}`);
+    if (!r.ok) throw new Error();
+    const text = await r.text();
+    $("legalText").replaceChildren(doc === "license" ? el("pre", "", text) : renderMd(text));
+  } catch { $("legalText").textContent = "Could not load this document."; }
+  $("legalTitle").textContent = titles[doc] || "Legal";
+  if (!$("legalDlg").open) $("legalDlg").showModal();
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-legal]");
+  if (!a) return;
+  e.preventDefault();
+  showLegal(a.dataset.legal);
+});
+
 $("newBtn").onclick = async () => {
+  if (!(await requireNotice())) return;
   $("fTitle").value = ""; $("fNewFolder").value = "";
   folderTouched = false;
   const ms = $("micStatus");
@@ -1124,6 +1222,7 @@ async function poll() {
 
 /* ------------------------------------------------------------- start */
 const OPEN_SETTINGS = location.hash === "#settings";   // the menu bar's "Change shortcut…"
+requireNotice();                         // first launch: show the notice right away
 (function start() {
   const m = location.hash.match(/^#\/l\/(.+)$/);
   if (m) openLecture(decodeURIComponent(m[1])); else showLibrary();
@@ -1379,6 +1478,7 @@ function uploadOne(file, title, folder, onPct) {
 const titleFromName = (n) => n.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").trim() || "Imported lecture";
 
 $("importBtn").onclick = async () => {
+  if (!(await requireNotice())) return;
   $("iFiles").value = ""; $("iTitle").value = "";
   $("iProgress").classList.add("hidden");
   $("iGo").disabled = false;

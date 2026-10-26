@@ -37,6 +37,8 @@ done
 
 if [ "$WANT_NOTES" = 1 ]; then
   echo "==> Installing Ollama and the notes model (qwen2.5:3b, ~2 GB)"
+  echo "    Note: qwen2.5:3b is under the Qwen Research License (research/evaluation use only)."
+  echo "    See THIRD_PARTY_NOTICES.md."
   brew install ollama
   brew services start ollama >/dev/null 2>&1 || true
   ollama pull qwen2.5:3b

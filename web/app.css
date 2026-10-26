@@ -310,3 +310,24 @@ button.kbd.listening{border-color:var(--accent);color:var(--accent)}
 .hint.rec{color:var(--ink)}
 textarea.diag{width:100%;margin-top:10px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
   background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;resize:vertical}
+.notice{max-width:520px;font-size:14px;line-height:1.5}
+.notice p{margin:8px 0}
+.notice ul{margin:8px 0 4px;padding-left:20px}
+.notice li{margin:4px 0}
+.notice a,.links a[data-legal]{color:var(--accent)}
+.legal-text{font-size:13.5px;line-height:1.55;max-height:62vh;overflow:auto;
+  background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:4px 16px 12px;
+  margin:10px 0 0;overflow-wrap:anywhere}
+#legalDlg{width:min(720px,92vw);max-width:none}
+#noticeDlg{max-width:540px}
+#legalDlg .set-wrap{box-sizing:border-box}
+.legal-text h3{font-size:16px;margin:12px 0 6px}
+.legal-text h4{font-size:13px;margin:16px 0 4px;text-transform:none;letter-spacing:0;color:var(--ink)}
+.legal-text p,.legal-text ul{margin:6px 0}
+.legal-text ul{padding-left:20px}
+.legal-text a{color:var(--accent)}
+.legal-text code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+.legal-text pre{white-space:pre-wrap;font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto}
+.legal-text table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12.5px}
+.legal-text th,.legal-text td{border:1px solid var(--line);padding:5px 7px;text-align:left;vertical-align:top}
+.legal-text th{background:var(--panel)}
