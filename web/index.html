@@ -228,23 +228,56 @@
   </div>
 </dialog>
 
-<dialog id="noticeDlg" aria-labelledby="noticeTitle">
-  <div class="set-wrap notice">
-    <h3 id="noticeTitle">Before you record</h3>
-    <p><b>Recording laws differ by place.</b> In some states and countries everyone being
-    recorded must agree to it. Others need only one person's consent.</p>
-    <p><b>Your school sets rules too.</b> Many classes don't allow recording without the
-    instructor's permission, unless it's an approved accommodation through disability
-    services. Lecture recordings and slides may be copyrighted.</p>
-    <ul>
-      <li>Check your school's policy and ask your instructor when in doubt.</li>
-      <li>Keep recordings for your own study; don't share them without permission.</li>
-      <li>Transcripts and AI notes can be wrong. Check anything important against the recording.</li>
-    </ul>
-    <p class="hint">Everything stays on this computer: no account, no tracking. This is
-    general information, not legal advice. Read the full
-    <a href="#" data-legal="terms">terms</a> and <a href="#" data-legal="privacy">privacy</a> notes.</p>
-    <menu>
+<dialog id="noticeDlg" aria-labelledby="noticeTitle" aria-describedby="noticeLead">
+  <div class="notice">
+    <header class="notice-head">
+      <span class="notice-badge" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg>
+      </span>
+      <div>
+        <h3 id="noticeTitle">Before you record</h3>
+        <p id="noticeLead">Three things worth knowing. It takes ten seconds.</p>
+      </div>
+    </header>
+
+    <ol class="notice-points">
+      <li>
+        <span class="ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3v18M7 21h10M5 7h14M5 7l-3 7a3 3 0 0 0 6 0zM19 7l-3 7a3 3 0 0 0 6 0z"/></svg>
+        </span>
+        <div>
+          <b>Recording laws differ by place</b>
+          <span>In some states and countries, everyone being recorded has to agree. Elsewhere, one person's consent is enough.</span>
+        </div>
+      </li>
+      <li>
+        <span class="ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c3 2.5 9 2.5 12 0v-5M22 9v6"/></svg>
+        </span>
+        <div>
+          <b>Your school may have its own rules</b>
+          <span>Many classes need the instructor's OK, unless recording is an approved accommodation through disability services.</span>
+        </div>
+      </li>
+      <li>
+        <span class="ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>
+        </span>
+        <div>
+          <b>Keep it for your own study</b>
+          <span>Don't share recordings or slides without permission; they may be copyrighted. And double-check AI notes against the audio.</span>
+        </div>
+      </li>
+    </ol>
+
+    <p class="notice-foot">
+      <span class="lock" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></span>
+      <span>Everything stays on this computer. No account, no tracking.
+      This is general information, not legal advice.
+      <a href="#" data-legal="terms">Terms</a> · <a href="#" data-legal="privacy">Privacy</a></span>
+    </p>
+
+    <menu class="notice-actions">
       <button type="button" class="ghost" id="noticeLater">Not now</button>
       <button type="button" class="primary" id="noticeOk">I understand</button>
     </menu>

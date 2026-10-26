@@ -310,20 +310,44 @@ button.kbd.listening{border-color:var(--accent);color:var(--accent)}
 .hint.rec{color:var(--ink)}
 textarea.diag{width:100%;margin-top:10px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
   background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;resize:vertical}
-.notice{max-width:520px;font-size:14px;line-height:1.5}
-.notice p{margin:8px 0}
-.notice ul{margin:8px 0 4px;padding-left:20px}
-.notice li{margin:4px 0}
-.notice a,.links a[data-legal]{color:var(--accent)}
-.legal-text{font-size:13.5px;line-height:1.55;max-height:62vh;overflow:auto;
-  background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:4px 16px 12px;
+/* first-run recording notice */
+#noticeDlg{max-width:500px}
+.notice{padding:26px 26px 20px}
+.notice svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round}
+.notice-head{display:flex;gap:14px;align-items:center;margin-bottom:18px}
+.notice-badge{flex:none;width:44px;height:44px;padding:10px;border-radius:50%;
+  background:var(--accent-soft);color:var(--accent)}
+.notice-head h3{margin:0;font-size:19px;letter-spacing:-.01em}
+.notice-head p{margin:2px 0 0;color:var(--muted);font-size:13.5px}
+.notice-points{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.notice-points li{display:flex;gap:12px;padding:11px 12px;border-radius:var(--radius);
+  background:var(--bg);border:1px solid var(--line)}
+.notice-points .ic{flex:none;width:22px;height:22px;margin-top:1px;color:var(--accent)}
+.notice-points b{display:block;font-size:14.5px;font-weight:620;margin-bottom:2px}
+.notice-points span:not(.ic){display:block;font-size:13.5px;line-height:1.5;color:var(--muted)}
+.notice-foot{display:flex;gap:8px;align-items:flex-start;margin:16px 2px 0;
+  font-size:12.5px;line-height:1.5;color:var(--muted)}
+.notice-foot .lock{flex:none;width:15px;height:15px;margin-top:2px}
+.notice-foot a{color:var(--accent);text-decoration:none;font-weight:540}
+.notice-foot a:hover{text-decoration:underline}
+.notice-actions{display:flex;justify-content:flex-end;gap:8px;margin:20px 0 0;padding:0}
+.notice-actions button{min-width:110px}
+#noticeOk:focus-visible,#noticeLater:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:480px){
+  .notice{padding:20px 16px 16px}
+  .notice-actions{flex-direction:column-reverse}
+  .notice-actions button{width:100%}
+}
+.legal-text{font-size:14px;line-height:1.6;max-height:64vh;overflow:auto;
+  background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);padding:6px 22px 16px;
   margin:10px 0 0;overflow-wrap:anywhere}
 #legalDlg{width:min(720px,92vw);max-width:none}
-#noticeDlg{max-width:540px}
 #legalDlg .set-wrap{box-sizing:border-box}
-.legal-text h3{font-size:16px;margin:12px 0 6px}
-.legal-text h4{font-size:13px;margin:16px 0 4px;text-transform:none;letter-spacing:0;color:var(--ink)}
-.legal-text p,.legal-text ul{margin:6px 0}
+.legal-text h3{font-size:18px;margin:14px 0 8px;letter-spacing:-.01em}
+.legal-text h4{font-size:14.5px;margin:20px 0 6px;text-transform:none;letter-spacing:0;color:var(--ink)}
+.legal-text p,.legal-text ul{margin:8px 0;max-width:68ch}
+.legal-text li{margin:3px 0}
 .legal-text ul{padding-left:20px}
 .legal-text a{color:var(--accent)}
 .legal-text code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -331,3 +355,4 @@ textarea.diag{width:100%;margin-top:10px;font:12px/1.4 ui-monospace,SFMono-Regul
 .legal-text table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12.5px}
 .legal-text th,.legal-text td{border:1px solid var(--line);padding:5px 7px;text-align:left;vertical-align:top}
 .legal-text th{background:var(--panel)}
+.links a[data-legal]{color:var(--accent)}
