@@ -42,9 +42,9 @@ SAMPLE_WIDTH = 2             # pcm_s16le
 BYTES_PER_SEC = SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH   # 32000
 SEGMENT_SECONDS = 60
 
-# Preferred capture device, matched BY NAME. Indices are volatile on this
-# machine: a Continuity "iPhone Microphone" sits at index 1 and shifts
-# every index below it when it appears/disappears.
+# Preferred capture device, matched BY NAME. Indices are volatile: a
+# Continuity iPhone microphone can appear at index 1 and shift every index
+# below it when it connects or disconnects.
 PREFERRED_DEVICES = ["MacBook Air Microphone", "MacBook Pro Microphone", "Built-in Microphone"]
 
 # --- archive -----------------------------------------------------------

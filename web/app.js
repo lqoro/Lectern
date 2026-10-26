@@ -556,7 +556,7 @@ async function refreshFolders() {
   try { L.folders = (await api("/api/folders")).folders; } catch { /* keep what we have */ }
 }
 
-// "religion 102126" -> RELI, "lit101226" -> Literature, "crju092826" -> crju.
+// "biology 102126" -> BIO, "hist101226" -> History, "chem092826" -> chem.
 // Only a suggestion: the dialog shows where the lecture will go, and any
 // choice the user makes themselves is never overridden.
 const GUESS_SKIP = new Set(["the", "and", "for", "with", "class", "lecture", "lec",
@@ -594,7 +594,7 @@ async function moveLecture(id, folder) {
 }
 
 async function askNewClass() {
-  return cleanFolder(prompt("Name of the new class (e.g. RELI 101)")) || null;
+  return cleanFolder(prompt("Name of the new class (e.g. BIO 101)")) || null;
 }
 
 // Cancel is type="button" in these dialogs so that Enter in a text field
@@ -871,7 +871,7 @@ $("fNewFolder").addEventListener("input", syncFolderUi);
 $("fTitle").addEventListener("input", () => {
   if (folderTouched) return;
   // Re-guess from the whole title each time, falling back to the default, so
-  // a match made mid-word ("re" -> RELI) does not stick once the title moves on.
+  // a match made mid-word ("bi" -> BIO) does not stick once the title moves on.
   const want = guessFolder($("fTitle").value) ?? folderDefault;
   if ($("fFolder").value !== want) { $("fFolder").value = want; syncFolderUi(); }
 });

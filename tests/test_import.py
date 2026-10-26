@@ -99,7 +99,7 @@ class Endpoint(unittest.TestCase):
         self.client = self.server.app.test_client()
 
     def post(self, data, **headers):
-        return self.client.post("/api/import?title=Week%208&folder=RELI&filename=w8.mp4",
+        return self.client.post("/api/import?title=Week%208&folder=BIO&filename=w8.mp4",
                                 data=data, headers={"content-type": "application/octet-stream", **headers})
 
     def test_upload_queues_an_import(self):
@@ -111,7 +111,7 @@ class Endpoint(unittest.TestCase):
         self.assertEqual(self.submitted, [lid])
         Lecture = importlib.import_module("lectern.storage").Lecture
         lec = Lecture.load(lid)
-        self.assertEqual(lec.folder, "RELI")
+        self.assertEqual(lec.folder, "BIO")
         m = lec.manifest()
         self.assertEqual((m["title"], m["state"], m["source"]["filename"]), ("Week 8", "importing", "w8.mp4"))
         self.assertEqual(Path(lec.work / "import-source").read_bytes(), src.read_bytes())

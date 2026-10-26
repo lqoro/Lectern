@@ -5,7 +5,7 @@ It looks in its own models directory first, then in the legacy location, picks
 the best installed model that suits this machine, and can fetch a smaller or
 larger one on request. Nothing is downloaded unless the user asks for it.
 
-The `ram_mb` and `size_mb` figures are the ones measured by bench/bench.py on an
+The `ram_mb` and `size_mb` figures are the ones measured with a benchmark script on an
 M1 with 8 GB (5-minute excerpt). The CPU-only recommendations are heuristics,
 not measurements: the benchmark has no CPU-only run yet.
 """
@@ -30,7 +30,7 @@ BASE_URL = os.environ.get(
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main")
 
 LEGACY_DIR = Path.home() / ".localflow" / "models"
-# Models fetched by bench/bench.py --download live here; use them rather than
+# A developer's benchmark downloads (bench/models, not in the repo) live here; use them rather than
 # downloading the same files a second time.
 BENCH_DIR = Path(__file__).resolve().parent.parent / "bench" / "models"
 MODELS_DIR = Path(os.environ.get("LECTERN_MODEL_DIR", config.SUPPORT_DIR / "models"))
@@ -50,13 +50,13 @@ class Model:
     # Other files that are the same model and may already be on disk, as
     # (filename, size_mb). Used when found; never downloaded.
     alts: tuple[tuple[str, int], ...] = ()
-    # Measured speed, x real time, on an M1 (bench/results.md): with the
+    # Measured speed, x real time, on an M1 (developer benchmark, 5-min lecture excerpt): with the
     # Apple GPU, and CPU-only. Used for "an hour of lecture takes ~N min".
     xrt_gpu: float = 0.0
     xrt_cpu: float = 0.0
 
 
-# Ordered best-quality first. Measured 2026-10-26 on an M1 (bench/results.md):
+# Ordered best-quality first. Measured 2026-10-26 on an M1:
 # the q5_1 builds of tiny/base/small are ~60% smaller, 15-25% faster and use
 # 30-45% less RAM than the full-precision files, with no loss on the
 # agreement measure, so they are what Lectern downloads. CPU-only speeds on

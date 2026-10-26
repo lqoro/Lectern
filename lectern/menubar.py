@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 import plistlib
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -100,8 +99,17 @@ def install() -> None:
 def uninstall() -> None:
     _launchctl("bootout", f"gui/{os.getuid()}/{BUNDLE_ID}")
     AGENT.unlink(missing_ok=True)
-    if APP_DIR.is_dir() and (APP_DIR / "Contents" / "MacOS" / EXE_NAME).exists():
-        shutil.rmtree(APP_DIR)        # only our own bundle, checked by its executable
+    # No rmtree anywhere in Lectern (see README): remove exactly the files
+    # build() writes, then the directories only if that left them empty.
+    contents = APP_DIR / "Contents"
+    for f in (contents / "MacOS" / EXE_NAME, contents / "Info.plist",
+              contents / "_CodeSignature" / "CodeResources"):
+        f.unlink(missing_ok=True)
+    for d in (contents / "MacOS", contents / "_CodeSignature", contents, APP_DIR):
+        try:
+            d.rmdir()
+        except OSError:
+            pass                       # not empty or already gone: leave it
     print("Removed the Lectern menu bar helper.")
 
 

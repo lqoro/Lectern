@@ -81,8 +81,8 @@ loopback-only by default.
 - Karaoke-style highlighting follows playback.
 - **Class folders.** Real directories under `~/Lectures/BIO 201/…`, so they are
   the same folders you see in Finder. Pick the class first when you start
-  recording (it is guessed from the title — "religion 102126" files under
-  RELI — and "＋ New class…" makes one on the spot). Move a lecture later from
+  recording (it is guessed from the title — "biology 102126" files under
+  BIO — and "＋ New class…" makes one on the spot). Move a lecture later from
   its card (click the class tag, or ⋯ ▸ Move to class) or the Class menu on the
   lecture page. A move asked for while it is still recording or processing is
   queued and happens as soon as nothing is writing into it.
@@ -170,7 +170,7 @@ Your data lives in `~/Lectures/` as plain files. See the README in that folder.
 ```
 lectern/
 ├── Lectern.command      double-click launcher
-├── run.sh               start in the foreground
+├── install.sh           one-time setup (macOS)
 ├── lectern/
 │   ├── config.py        every path and tunable
 │   ├── audio.py         device resolution by name + mic preflight
@@ -190,13 +190,15 @@ lectern/
 │   ├── archive.py       AAC encode + the verification gate
 │   ├── recovery.py      startup salvage + deferred WAV release
 │   ├── pipeline.py      stage lock enforcing the RAM budget
+│   ├── menubar.py       builds/installs the menu bar helper
+│   ├── lectern_menubar.swift  menu bar icon + global start/stop shortcut
 │   └── server.py        Flask API, HTTP Range for audio seeking
 └── web/                 no build step; plain ES modules
 ```
 
 ## Notes for whoever works on this next
 
-Several non-obvious things were measured on this machine, and the code depends
+Several non-obvious things were measured on an M1 MacBook, and the code depends
 on them. Changing any of these will break something quietly:
 
 - **Never record with `ffmpeg -f avfoundation`.** Its audio input holds a
@@ -210,7 +212,7 @@ on them. Changing any of these will break something quietly:
   must be exactly 1,920,044 bytes.
 - **The notes prompt must contain no subject-matter examples.** It used to
   show glycolysis/ATP examples; given a near-empty transcript, qwen2.5:3b
-  copied them into religion notes. Notes, terms, quiz and summary are now
+  copied them into history-lecture notes. Notes, terms, quiz and summary are now
   dropped unless they are made of words the lecture used, and a recording
   with under 25 distinct content words gets no notes at all.
 - **whisper runs with `-mc 0 -sns`.** With previous-text context, one bad

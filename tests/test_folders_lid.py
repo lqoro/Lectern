@@ -151,7 +151,7 @@ class Storage(unittest.TestCase):
         lec = _new("ghost")
         stale = Lecture(lec.path)
         old = lec.path
-        lec.move_to_folder("RELI")
+        lec.move_to_folder("BIO")
         with self.assertRaises(FileNotFoundError):
             stale.update(title="x")
         self.assertFalse(old.exists())
@@ -162,9 +162,9 @@ class Storage(unittest.TestCase):
         _new("emoji").move_to_folder(name + "\ud83d")           # must not raise
 
     def test_noop_move_clears_queued_move(self):
-        lec = _new("noop", folder="RELI")
-        lec.set_pending_folder("RELI")
-        lec.move_to_folder("RELI")
+        lec = _new("noop", folder="BIO")
+        lec.set_pending_folder("BIO")
+        lec.move_to_folder("BIO")
         self.assertIsNone(lec.pending_folder())
 
 
@@ -232,20 +232,20 @@ class Moves(unittest.TestCase):
         lec = _new("early")
         lec.set_state("paused")
         server._STARTUP_DONE.clear()
-        r = self.c.post(f"/api/lecture/{lec.id}/folder", json={"folder": "crju"}).get_json()
+        r = self.c.post(f"/api/lecture/{lec.id}/folder", json={"folder": "chem"}).get_json()
         self.assertTrue(r["deferred"])
         self.assertEqual(server._apply_pending_moves(), 0)
         server._STARTUP_DONE.set()
         server._apply_pending_moves()
-        self.assertEqual(Lecture.load(lec.id).folder, "crju")
+        self.assertEqual(Lecture.load(lec.id).folder, "chem")
 
     def test_recording_on_disk_counts_as_busy(self):
         lec = _new("rec")                       # state "recording", no writer here
-        r = self.c.post(f"/api/lecture/{lec.id}/folder", json={"folder": "RELI"}).get_json()
+        r = self.c.post(f"/api/lecture/{lec.id}/folder", json={"folder": "BIO"}).get_json()
         self.assertTrue(r["deferred"])
         lec.set_state("paused")
         server._apply_pending_moves()
-        self.assertEqual(Lecture.load(lec.id).folder, "RELI")
+        self.assertEqual(Lecture.load(lec.id).folder, "BIO")
 
     def test_record_start_holds_the_move_lock(self):
         held = []
@@ -254,7 +254,7 @@ class Moves(unittest.TestCase):
             held.append(server._MOVE_LOCK.locked())
             return {"recording": True}
         with mock.patch.object(server.RECORDER, "start", start):
-            self.c.post("/api/record/start", json={"title": "x", "folder": "RELI"})
+            self.c.post("/api/record/start", json={"title": "x", "folder": "BIO"})
         self.assertEqual(held, [True])
 
     def test_resume_refused_while_processing(self):

@@ -50,7 +50,7 @@ if [ "$WANT_MENUBAR" = 1 ]; then
   .venv/bin/python -m lectern.menubar install
 fi
 
-chmod +x Lectern.command Lectern-on-Phone.command run.sh
+chmod +x Lectern.command Lectern-on-Phone.command
 echo
 echo "Done. Start Lectern with:  ./Lectern.command"
 echo "First launch: open Settings (⚙) and download the speech model it recommends for this computer."
