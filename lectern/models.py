@@ -30,6 +30,9 @@ BASE_URL = os.environ.get(
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main")
 
 LEGACY_DIR = Path.home() / ".localflow" / "models"
+# Models fetched by bench/bench.py --download live here; use them rather than
+# downloading the same files a second time.
+BENCH_DIR = Path(__file__).resolve().parent.parent / "bench" / "models"
 MODELS_DIR = Path(os.environ.get("LECTERN_MODEL_DIR", config.SUPPORT_DIR / "models"))
 SETTINGS_FILE = config.SUPPORT_DIR / "settings.json"
 _MB = 1_000_000          # catalogue sizes are decimal MB, as on the download page
@@ -83,7 +86,7 @@ def save_settings(**fields) -> dict:
 
 # ------------------------------------------------------------ discovery
 def search_dirs() -> list[Path]:
-    return [MODELS_DIR, LEGACY_DIR]
+    return [MODELS_DIR, LEGACY_DIR, BENCH_DIR]
 
 
 def installed_path(model: Model) -> Path | None:

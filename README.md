@@ -55,6 +55,17 @@ loopback-only by default.
   was made**, even though the note is a paraphrase that appears nowhere
   verbatim in the transcript.
 
+## Online lectures: import a recording
+
+Click **Import** and pick a downloaded lecture video or audio file (Panopto,
+Zoom or Canvas recordings, mp4/mov/webm/m4a/mp3/wav, phone voice memos). Lectern
+pulls out the sound and runs the same transcript, notes and click-to-jump
+pipeline; nothing is played back, so a one-hour video takes minutes, headphones
+or not. Only the audio is kept (the uploaded file is released with the working
+files once the archive verifies). Several files can be imported at once and are
+processed in order. Check your school's or platform's policy before downloading
+course videos.
+
 ## Speech models and weak computers
 
 Lectern picks a speech model to suit the machine (`GET /api/system`): the

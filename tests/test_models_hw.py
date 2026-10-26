@@ -30,7 +30,8 @@ class Selection(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.m = fresh_modules(self.tmp, LECTERN_MODEL_DIR=str(Path(self.tmp) / "models"))
-        self.m.LEGACY_DIR = Path(self.tmp) / "legacy"           # never touch the real one
+        self.m.LEGACY_DIR = Path(self.tmp) / "legacy"           # never touch the real ones
+        self.m.BENCH_DIR = Path(self.tmp) / "bench"
 
     def test_nothing_installed(self):
         self.assertIsNone(self.m.active_path())
@@ -105,6 +106,7 @@ class Download(unittest.TestCase):
         m = fresh_modules(tmp, LECTERN_MODEL_BASE_URL=url,
                           LECTERN_MODEL_DIR=str(Path(tmp) / "models"))
         m.LEGACY_DIR = Path(tmp) / "legacy"
+        m.BENCH_DIR = Path(tmp) / "bench"
         tiny = m.BY_ID["tiny.en"]
         # a previous interrupted attempt left the first 30 MB behind
         m.MODELS_DIR.mkdir(parents=True)
@@ -124,6 +126,7 @@ class Download(unittest.TestCase):
         m = fresh_modules(tmp, LECTERN_MODEL_BASE_URL=url,
                           LECTERN_MODEL_DIR=str(Path(tmp) / "models"))
         m.LEGACY_DIR = Path(tmp) / "legacy"
+        m.BENCH_DIR = Path(tmp) / "bench"
         # Content-Length (1000) matches what was sent, so this installs a tiny
         # file; the installed() size floor must still refuse to treat it as a model.
         m.DOWNLOADER.start("tiny.en")
