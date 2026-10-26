@@ -308,3 +308,5 @@ button.kbd{font-variant-numeric:tabular-nums;letter-spacing:.06em;min-width:72px
   border:1px solid var(--line);border-radius:7px;padding:4px 10px}
 button.kbd.listening{border-color:var(--accent);color:var(--accent)}
 .hint.rec{color:var(--ink)}
+textarea.diag{width:100%;margin-top:10px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;resize:vertical}

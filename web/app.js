@@ -1289,27 +1289,70 @@ for (const [label, href] of HELP_LINKS) {
   $("helpLinks").append(a);
 }
 
+async function diagnosticsText() {
+  const d = await api("/api/diagnostics");
+  const hw = d.hardware;
+  return [
+    `${d.app}`,
+    `Device: ${[hw.device?.name, hw.device?.chip].filter(Boolean).join(", ") || "unknown"}`,
+    `OS: ${hw.os} ${hw.machine}, Python ${hw.python}`,
+    `Memory: ${hw.ram_total_mb} MB total, ${hw.ram_available_mb} MB available`,
+    `CPU: ${hw.cpu_cores} cores / ${hw.cpu_threads} threads, accelerator ${hw.accelerator}`,
+    `Speech model: ${d.speech_model.file || "none"} (${d.speech_model.why}), ${hw.whisper_threads} threads`,
+    `whisper-cli: ${d.whisper_cli}`, `ffmpeg: ${d.ffmpeg}`,
+    `Browser: ${navigator.userAgent}`,
+  ].join("\n");
+}
+
+// Safari only lets a page write the clipboard during the click itself, not
+// after an await, so the write starts synchronously with a promised blob.
+function copyPromisedText(textPromise) {
+  if (!navigator.clipboard || typeof ClipboardItem === "undefined") return Promise.reject(new Error("no clipboard"));
+  const blob = textPromise.then((t) => new Blob([t], { type: "text/plain" }));
+  return navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+}
+
+// Fallback copy. The textarea goes INSIDE the open dialog: everything outside
+// a modal dialog is inert, so a textarea on <body> can't be selected and
+// execCommand silently copies nothing.
+function copyViaTextarea(text, host) {
+  const ta = el("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;opacity:0;pointer-events:none";
+  host.append(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  ta.remove();
+  return ok;
+}
+
 $("diagBtn").onclick = async () => {
-  try {
-    const d = await api("/api/diagnostics");
-    const hw = d.hardware;
-    const text = [
-      `${d.app}`,
-      `Device: ${[hw.device?.name, hw.device?.chip].filter(Boolean).join(", ") || "unknown"}`,
-      `OS: ${hw.os} ${hw.machine}, Python ${hw.python}`,
-      `Memory: ${hw.ram_total_mb} MB total, ${hw.ram_available_mb} MB available`,
-      `CPU: ${hw.cpu_cores} cores / ${hw.cpu_threads} threads, accelerator ${hw.accelerator}`,
-      `Speech model: ${d.speech_model.file || "none"} (${d.speech_model.why}), ${hw.whisper_threads} threads`,
-      `whisper-cli: ${d.whisper_cli}`, `ffmpeg: ${d.ffmpeg}`,
-      `Browser: ${navigator.userAgent}`,
-    ].join("\n");
-    try { await navigator.clipboard.writeText(text); }
-    catch {
-      const ta = el("textarea"); ta.value = text; document.body.append(ta); ta.select();
-      document.execCommand("copy"); ta.remove();
-    }
+  const textP = diagnosticsText();
+  // Started before any await, while the click still counts as a user gesture.
+  const firstTry = copyPromisedText(textP).then(() => true, () => false);
+  const host = $("settingsDlg");
+  let text;
+  try { text = await textP; }
+  catch (e) { return toast(e.message || "Could not collect diagnostics."); }
+  let copied = await firstTry;
+  if (!copied) {
+    try { await navigator.clipboard.writeText(text); copied = true; } catch { /* next */ }
+  }
+  if (!copied) copied = copyViaTextarea(text, host);
+  const box = $("diagText");
+  if (copied) {
+    box.classList.add("hidden");
     toast("Diagnostics copied. Paste them into your bug report.");
-  } catch (e) { toast(e.message || "Could not collect diagnostics."); }
+  } else {
+    // Never claim a copy that didn't happen: show it to copy by hand.
+    box.value = text;
+    box.classList.remove("hidden");
+    box.focus();
+    box.select();
+    toast("Your browser blocked copying. The details are selected below: press \u2318C.", 6000);
+  }
 };
 
 /* ------------------------------------------------------------ import */
