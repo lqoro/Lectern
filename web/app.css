@@ -3,11 +3,15 @@
   --accent:#3b6ef5; --accent-soft:#e8efff; --danger:#c8352b; --rec:#e0453a;
   --hi:#ffe9a8; --hi-edge:#e8c65a; --ok:#1a7f4b;
   --radius:10px; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --st-lectures:#3b6ef5; --st-trash:#b4a7f0; --st-speech:#1a9f8a; --st-notes:#e3962b;
+  --st-app:#8a8578; --st-other:#d9d4cb;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#16171a; --panel:#1e2024; --ink:#e9e7e3; --muted:#9a968f; --line:#2f3238;
   --accent:#6d9bff; --accent-soft:#22304d; --danger:#ff7a6e; --rec:#ff5a4d;
   --hi:#5a4a12; --hi-edge:#a8891f; --ok:#4ecf8f;
+  --st-lectures:#6d9bff; --st-trash:#8f82d6; --st-speech:#3cc4ad; --st-notes:#f0ac4b;
+  --st-app:#8e8a83; --st-other:#3a3d44;
 }}
 *{box-sizing:border-box}
 html,body{height:100%}
@@ -356,3 +360,22 @@ textarea.diag{width:100%;margin-top:10px;font:12px/1.4 ui-monospace,SFMono-Regul
 .legal-text th,.legal-text td{border:1px solid var(--line);padding:5px 7px;text-align:left;vertical-align:top}
 .legal-text th{background:var(--panel)}
 .links a[data-legal]{color:var(--accent)}
+/* storage */
+.storage{margin-top:6px}
+.st-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px}
+.st-head b{font-size:20px;font-weight:650;letter-spacing:-.01em}
+.st-head span{font-size:12.5px;color:var(--muted)}
+.st-bar{display:flex;height:10px;border-radius:999px;overflow:hidden;background:var(--bg);
+  border:1px solid var(--line)}
+.st-bar i{display:block;height:100%;min-width:0}
+.st-bar i.tiny{min-width:3px}
+.st-scale{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);margin:5px 0 10px}
+.st-list{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.st-list li{display:grid;grid-template-columns:10px 1fr auto;gap:10px;align-items:baseline;
+  padding:6px 2px;border-bottom:1px solid var(--line)}
+.st-list li:last-child{border-bottom:0}
+.st-dot{width:10px;height:10px;border-radius:3px;align-self:center}
+.st-name{font-size:13.5px}
+.st-name small{display:block;font-size:12px;color:var(--muted);line-height:1.4}
+.st-size{font-size:13px;font-variant-numeric:tabular-nums;color:var(--ink)}
+.st-note{font-size:12px;color:var(--muted);margin:8px 0 0}

@@ -241,3 +241,27 @@ class LegalAndNotice(Base):
             self.assertTrue(self.client.get("/api/notice").get_json()["accepted"])
             self.assertEqual(self.client.post("/api/record/toggle").status_code, 200)
             self.assertEqual(started, [1])
+
+
+class Storage(Base):
+    def test_report_counts_each_part_and_the_disk(self):
+        usage = importlib.import_module("lectern.usage")
+        lec = self.storage.Lecture.create("Big one", state="complete")
+        (lec.path / "audio.m4a").write_bytes(b"\0" * 300_000)
+        gone = self.storage.Lecture.create("Deleted", state="complete")
+        (gone.path / "audio.m4a").write_bytes(b"\0" * 100_000)
+        gone.trash()
+        with mock.patch.object(usage, "_notes_model", lambda: {"name": "x:1b", "bytes": 5_000_000}):
+            r = usage.report(force=True)
+        parts = {p["key"]: p["bytes"] for p in r["parts"]}
+        self.assertGreaterEqual(parts["lectures"], 300_000)
+        self.assertLess(parts["lectures"], 380_000)          # trash not counted twice
+        self.assertGreaterEqual(parts["trash"], 100_000)
+        self.assertEqual(parts["notes"], 5_000_000)
+        self.assertEqual(r["total_bytes"], sum(parts.values()))
+        self.assertGreater(r["disk"]["total"], r["disk"]["free"])
+        self.assertEqual(self.client_storage_status(), 200)
+
+    def client_storage_status(self):
+        server = importlib.import_module("lectern.server")
+        return server.app.test_client().get("/api/storage").status_code

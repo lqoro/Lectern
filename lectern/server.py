@@ -17,7 +17,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
-from . import audio, config, hardware, importer, models, storage
+from . import audio, config, hardware, importer, models, storage, usage
 from .pipeline import PIPELINE
 from .recorder import RECORDER, RecorderBusy
 from .storage import Lecture
@@ -420,6 +420,12 @@ def api_model_download():
 def api_model_download_cancel():
     models.DOWNLOADER.cancel()
     return jsonify(models.DOWNLOADER.status())
+
+
+@app.get("/api/storage")
+def api_storage():
+    """Disk used by Lectern (lectures, models, app) against the whole disk."""
+    return jsonify(usage.report(force=request.args.get("fresh") == "1"))
 
 
 @app.get("/api/diagnostics")

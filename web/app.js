@@ -20,6 +20,8 @@ const api = async (path, opts) => {
 };
 const jpost = (p, o) => api(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(o || {}) });
 
+const bytesText = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(b >= 1e10 ? 0 : 1)} GB`
+  : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : b > 0 ? `${Math.max(1, Math.round(b / 1e3))} KB` : "0 KB";
 const fmt = (s) => {
   s = Math.max(0, Math.floor(s || 0));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
@@ -751,8 +753,12 @@ async function loadLibrary() {
     const size = used >= 1e9 ? `${(used / 1e9).toFixed(1)} GB`
                : used >= 1e6 ? `${(used / 1e6).toFixed(used < 1e7 ? 1 : 0)} MB`
                : `${Math.max(1, Math.round(used / 1e3))} KB`;
+    let appLine = `${size} used`;
+    try {
+      appLine = `Lectern uses ${bytesText((await api("/api/storage")).total_bytes)}`;
+    } catch { /* keep the lecture-only figure */ }
     $("storageLine").textContent =
-      `${L.lectures.length} lecture${L.lectures.length === 1 ? "" : "s"}, ${size} used\n` +
+      `${L.lectures.length} lecture${L.lectures.length === 1 ? "" : "s"} \u00b7 ${appLine}\n` +
       `${(s.free_bytes / 1e9).toFixed(0)} GB free on this Mac`;
   } catch { /* non-critical */ }
 }
@@ -1294,7 +1300,53 @@ async function loadSettings() {
   if (busy && $("settingsDlg").open) dlTimer = setTimeout(loadSettings, 800);
 }
 
-$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); };
+$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadStorage(); };
+
+/* ------------------------------------------------------------ storage */
+
+async function loadStorage() {
+  const box = $("storage");
+  let r;
+  try { r = await api("/api/storage"); }
+  catch { box.replaceChildren(el("p", "hint", "Could not measure storage.")); return; }
+  const disk = r.disk, pct = (b) => (100 * b / disk.total);
+  const head = el("div", "st-head");
+  head.append(el("b", "", `${bytesText(r.total_bytes)}`),
+              el("span", "", `used by Lectern \u00b7 ${bytesText(disk.free)} free of ${bytesText(disk.total)}`));
+  // Whole-disk bar: Lectern's parts in colour, everything else grey, free empty.
+  const bar = el("div", "st-bar");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", `Lectern uses ${bytesText(r.total_bytes)}; ` +
+    `${bytesText(disk.free)} of ${bytesText(disk.total)} free on this disk`);
+  for (const p of r.parts) {
+    if (!p.bytes) continue;
+    const seg = el("i", pct(p.bytes) < 0.4 ? "tiny" : "");
+    seg.style.width = `${pct(p.bytes)}%`;
+    seg.style.background = `var(--st-${p.key})`;
+    seg.title = `${p.label}: ${bytesText(p.bytes)}`;
+    bar.append(seg);
+  }
+  const other = Math.max(0, disk.used - r.total_bytes);
+  const os_ = el("i"); os_.style.width = `${pct(other)}%`; os_.style.background = "var(--st-other)";
+  os_.title = `Other files and apps: ${bytesText(other)}`;
+  bar.append(os_);
+  const scale = el("div", "st-scale");
+  scale.append(el("span", "", `Other apps and files: ${bytesText(other)}`), el("span", "", `${bytesText(disk.free)} free`));
+  const ul = el("ul", "st-list");
+  for (const p of r.parts) {
+    const li = el("li");
+    const dot = el("span", "st-dot"); dot.style.background = `var(--st-${p.key})`;
+    const name = el("span", "st-name", p.label);
+    name.append(el("small", "", p.detail));
+    li.append(dot, name, el("span", "st-size", bytesText(p.bytes)));
+    ul.append(li);
+  }
+  box.replaceChildren(head, bar, scale, ul);
+  if (r.shared_bytes) {
+    box.append(el("p", "st-note",
+      `Also using ${r.shared_detail} from another app's folder (not counted above).`));
+  }
+}
 if (OPEN_SETTINGS) setTimeout(() => $("settingsBtn").click(), 0);
 
 /* ------------------------------------------------- quick-record shortcut */
