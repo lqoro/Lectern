@@ -198,6 +198,15 @@
       <div class="bar-track"><i id="dlFill"></i></div>
     </div>
     <p class="hint err hidden" id="dlError"></p>
+    <h4>Quick record</h4>
+    <p class="hint">One shortcut starts a recording from anywhere, titled with the date and time;
+    the same shortcut stops it and starts transcribing. Needs the menu bar helper
+    (<code>./install.sh --menubar</code>).</p>
+    <div class="shortcut-row">
+      <label class="check"><input type="checkbox" id="scEnabled"> Enabled</label>
+      <button type="button" id="scBtn" class="ghost kbd" aria-describedby="scHint">⌘L</button>
+    </div>
+    <p class="hint" id="scHint"></p>
     <h4>Help</h4>
     <p class="hint">Copy system details to paste into a bug report. Nothing is sent
     anywhere; no lecture content is included.</p>

@@ -12,6 +12,7 @@ import mimetypes
 import secrets
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
@@ -254,6 +255,61 @@ def api_record_stop():
     with _MOVE_LOCK:                     # the pipeline must load the final path
         PIPELINE.submit(res["lecture_id"])
     return jsonify(res)
+
+
+def quick_title(now: datetime | None = None) -> str:
+    """Auto title for a one-key recording: start date and time, e.g. "102626 2:05 PM"."""
+    now = now or datetime.now()
+    hour = now.hour % 12 or 12
+    return f"{now:%m%d%y} {hour}:{now:%M} {'AM' if now.hour < 12 else 'PM'}"
+
+
+@app.post("/api/record/toggle")
+def api_record_toggle():
+    """One key (or the menu bar) to start or stop. No dialog, no title prompt,
+    no mic test: speed matters more here, and the helper still fails fast if
+    the mic cannot open. Stopping goes straight to transcription."""
+    if RECORDER.status().get("recording"):
+        resp = api_record_stop()
+        if isinstance(resp, tuple):
+            return resp
+        return jsonify({**resp.get_json(), "action": "stopped"})
+    try:
+        with _MOVE_LOCK:
+            st = RECORDER.start(quick_title(), "", folder="", skip_probe=True)
+        return jsonify({**st, "action": "started"})
+    except RecorderBusy as e:
+        return jsonify({"error": str(e), "kind": "busy"}), 409
+    except audio.PreflightError as e:
+        return jsonify({"error": e.message, "kind": e.kind, "detail": e.detail}), 400
+    except Exception as e:
+        return jsonify({"error": str(e), "kind": "error"}), 500
+
+
+_SHORTCUT_MODS = ("cmd", "ctrl", "opt", "shift")
+DEFAULT_SHORTCUT = {"enabled": True, "key": "L", "mods": ["cmd"]}
+
+
+@app.get("/api/shortcut")
+def api_shortcut_get():
+    """The global start/stop key, read by the menu bar helper."""
+    return jsonify(models.load_settings().get("shortcut") or DEFAULT_SHORTCUT)
+
+
+@app.post("/api/shortcut")
+def api_shortcut_set():
+    body = _json_body()
+    key = str(body.get("key") or "").upper()
+    mods = body.get("mods")
+    if not (len(key) == 1 and key.isascii() and key.isalnum()):
+        return jsonify({"error": "pick a letter or digit"}), 400
+    if (not isinstance(mods, list) or not any(m != "shift" for m in mods)
+            or any(m not in _SHORTCUT_MODS for m in mods)):
+        return jsonify({"error": "hold at least one of ⌘ ⌃ ⌥ ⇧"}), 400
+    sc = {"enabled": bool(body.get("enabled", True)), "key": key,
+          "mods": [m for m in _SHORTCUT_MODS if m in mods]}
+    models.save_settings(shortcut=sc)
+    return jsonify(sc)
 
 
 @app.post("/api/record/pause")

@@ -30,6 +30,20 @@ press that button. The microphone helper is compiled on first start with the
 Xcode Command Line Tools that Homebrew installs; macOS will ask for microphone
 permission the first time you record.
 
+## Quick record from anywhere (menu bar + shortcut)
+
+```bash
+./install.sh --menubar
+```
+
+adds a mic icon to the menu bar and a global shortcut, **⌘L** by default. Press it
+anywhere — Lectern doesn't need to be open — and a recording starts at once, titled
+with the date and time (`102626 2:20 PM`). Press it again to stop and transcribe.
+The menu also has Pause / Continue. Change or turn off the shortcut in
+**Settings (⚙) ▸ Quick record**. Note that ⌘L normally jumps to a browser's address
+bar; while the helper runs, it records instead, so pick another combination if you
+use that a lot. Remove it with `.venv/bin/python -m lectern.menubar uninstall`.
+
 ## Run it
 
 ```bash

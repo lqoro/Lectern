@@ -605,9 +605,14 @@ class Recorder:
             next_index = self._seed_from_archive_if_needed(lec)
             base_ms = sum(concat.wav_duration_ms(p) for p in lec.segments())
 
-            device = audio.resolve_device(fresh=True)
-            if not skip_probe:
-                audio.probe(device)
+            t0 = time.monotonic()
+            device = self._resume_device(lec, state)
+            if device is None:
+                # A different mic than the one this lecture was recorded on
+                # (or no record of it): enumerate afresh and test it first.
+                device = audio.resolve_device(fresh=True)
+                if not skip_probe:
+                    audio.probe(device)
 
             argv = self._argv(lec, device, start_number=next_index)
             log_offset = _size(lec.work / "record.stderr.log")
@@ -628,6 +633,7 @@ class Recorder:
             }, durable=True)
 
             lec.set_state("recording", pause_reason=None, paused_utc=None)
+            log.info("resumed %s in %.2f s", lec.id, time.monotonic() - t0)
             self._proc = proc
             self._state = RecordingState(
                 lecture_id=lec.id, pid=proc.pid, device_name=device.name,
@@ -642,6 +648,24 @@ class Recorder:
             self._guard = threading.Thread(target=self._watch, daemon=True)
             self._guard.start()
             return self.status()
+
+    @staticmethod
+    def _resume_device(lec: Lecture, state: str | None):
+        """Fast path for Continue after a pause: the mic this lecture was just
+        recording from, if it is still connected. It worked seconds or minutes
+        ago, so the ~2-3 s test recording is skipped -- that test is what made
+        resuming slow. The helper still exits at once if the mic cannot open,
+        and a mic that stops sending audio is flagged as stalled."""
+        if state != "paused":
+            return None
+        name = (_read_recording_json(lec) or {}).get("device_name")
+        if not name:
+            return None
+        try:
+            devices = audio.list_audio_devices(use_cache=True)
+        except audio.PreflightError:
+            return None
+        return next((d for d in devices if d.name == name), None)
 
     @staticmethod
     def _seed_from_archive_if_needed(lec: Lecture) -> int:

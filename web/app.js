@@ -1118,6 +1118,7 @@ async function poll() {
 }
 
 /* ------------------------------------------------------------- start */
+const OPEN_SETTINGS = location.hash === "#settings";   // the menu bar's "Change shortcut…"
 (function start() {
   const m = location.hash.match(/^#\/l\/(.+)$/);
   if (m) openLecture(decodeURIComponent(m[1])); else showLibrary();
@@ -1187,7 +1188,60 @@ async function loadSettings() {
   if (busy && $("settingsDlg").open) dlTimer = setTimeout(loadSettings, 800);
 }
 
-$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); };
+$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); };
+if (OPEN_SETTINGS) setTimeout(() => $("settingsBtn").click(), 0);
+
+/* ------------------------------------------------- quick-record shortcut */
+const SC_GLYPH = { ctrl: "\u2303", opt: "\u2325", shift: "\u21e7", cmd: "\u2318" };
+const scLabel = (sc) => ["ctrl", "opt", "shift", "cmd"].filter((m) => sc.mods.includes(m))
+  .map((m) => SC_GLYPH[m]).join("") + sc.key;
+let shortcut = null, scListening = false;
+
+function scHint() {
+  const conflict = shortcut.enabled && shortcut.key === "L" && shortcut.mods.join() === "cmd";
+  $("scHint").textContent = scListening
+    ? "Press the new combination (hold \u2318, \u2303 or \u2325 plus a letter or digit). Esc cancels."
+    : conflict
+      ? "Note: \u2318L normally jumps to a browser's address bar. While the helper runs, it records instead."
+      : "";
+}
+
+async function loadShortcut() {
+  try { shortcut = await api("/api/shortcut"); } catch { return; }
+  $("scEnabled").checked = shortcut.enabled;
+  $("scBtn").textContent = scLabel(shortcut);
+  scHint();
+}
+
+async function saveShortcut(next) {
+  try {
+    shortcut = await jpost("/api/shortcut", next);
+    toast(`Quick record: ${shortcut.enabled ? scLabel(shortcut) : "off"}`);
+  } catch (e) { toast(e.message || "Could not save the shortcut."); }
+  loadShortcut();
+}
+
+$("scEnabled").onchange = () => saveShortcut({ ...shortcut, enabled: $("scEnabled").checked });
+$("scBtn").onclick = () => {
+  scListening = true;
+  $("scBtn").classList.add("listening");
+  $("scBtn").textContent = "Press keys\u2026";
+  scHint();
+};
+document.addEventListener("keydown", (e) => {
+  if (!scListening) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const stop = () => { scListening = false; $("scBtn").classList.remove("listening"); };
+  if (e.key === "Escape") { stop(); return loadShortcut(); }
+  // e.code is layout-independent ("KeyL", "Digit5"), matching the helper's key codes.
+  const m = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(e.code);
+  const mods = [e.metaKey && "cmd", e.ctrlKey && "ctrl", e.altKey && "opt", e.shiftKey && "shift"].filter(Boolean);
+  if (!m) return;                                   // still holding modifiers
+  if (!mods.some((x) => x !== "shift")) { toast("Hold \u2318, \u2303 or \u2325 too."); return; }
+  stop();
+  saveShortcut({ enabled: true, key: m[1] || m[2], mods });
+}, true);
 $("modelBannerBtn").onclick = () => $("settingsBtn").click();
 $("settingsDlg").addEventListener("close", () => clearTimeout(dlTimer));
 $("dlCancel").onclick = async () => { await jpost("/api/models/download/cancel"); setTimeout(loadSettings, 500); };

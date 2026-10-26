@@ -1,7 +1,9 @@
 #!/bin/bash
 # One-time setup on macOS. Safe to re-run.
-#   ./install.sh            speech tools + Python env
-#   ./install.sh --notes    also install Ollama and the small notes model (~2 GB)
+#   ./install.sh              speech tools + Python env
+#   ./install.sh --notes      also install Ollama and the small notes model (~2 GB)
+#   ./install.sh --menubar    also add the menu bar helper: one shortcut (⌘L)
+#                             starts/stops a recording without opening Lectern
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -25,7 +27,15 @@ fi
 .venv/bin/python -m pip install --quiet --upgrade pip
 .venv/bin/python -m pip install --quiet -r requirements.txt
 
-if [ "${1:-}" = "--notes" ]; then
+WANT_NOTES=0; WANT_MENUBAR=0
+for arg in "$@"; do
+  case "$arg" in
+    --notes) WANT_NOTES=1 ;;
+    --menubar) WANT_MENUBAR=1 ;;
+  esac
+done
+
+if [ "$WANT_NOTES" = 1 ]; then
   echo "==> Installing Ollama and the notes model (qwen2.5:3b, ~2 GB)"
   brew install ollama
   brew services start ollama >/dev/null 2>&1 || true
@@ -33,6 +43,11 @@ if [ "${1:-}" = "--notes" ]; then
 else
   echo "    (Skipped AI notes. Without Ollama you still get transcripts and simple extractive notes."
   echo "     Run './install.sh --notes' to add them; it needs about 8 GB of RAM to be useful.)"
+fi
+
+if [ "$WANT_MENUBAR" = 1 ]; then
+  echo "==> Building the menu bar helper (starts at login; remove with: .venv/bin/python -m lectern.menubar uninstall)"
+  .venv/bin/python -m lectern.menubar install
 fi
 
 chmod +x Lectern.command Lectern-on-Phone.command run.sh

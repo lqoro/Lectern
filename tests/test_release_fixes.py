@@ -114,3 +114,64 @@ class NotesRegenerate(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QuickRecord(Base):
+    def setUp(self):
+        super().setUp()
+        self.server = importlib.import_module("lectern.server")
+        self.client = self.server.app.test_client()
+
+    def test_auto_title_is_date_and_time(self):
+        from datetime import datetime
+        self.assertEqual(self.server.quick_title(datetime(2026, 10, 26, 14, 5)), "102626 2:05 PM")
+        self.assertEqual(self.server.quick_title(datetime(2026, 1, 2, 0, 0)), "010226 12:00 AM")
+
+    def test_toggle_starts_without_dialog_or_mic_test(self):
+        calls = {}
+
+        def start(title, course="", folder="", *, skip_probe=False):
+            calls.update(title=title, skip_probe=skip_probe)
+            return {"recording": True, "lecture_id": "x"}
+
+        with mock.patch.object(self.server.RECORDER, "status", lambda: {"recording": False}), \
+             mock.patch.object(self.server.RECORDER, "start", start):
+            r = self.client.post("/api/record/toggle")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["action"], "started")
+        self.assertTrue(calls["skip_probe"])
+        self.assertRegex(calls["title"], r"^\d{6} \d{1,2}:\d{2} [AP]M$")
+
+    def test_toggle_stops_when_recording(self):
+        with mock.patch.object(self.server.RECORDER, "status", lambda: {"recording": True}), \
+             mock.patch.object(self.server.RECORDER, "stop", lambda: {"lecture_id": "x", "stopped": True}), \
+             mock.patch.object(self.server.PIPELINE, "submit", lambda i: None):
+            r = self.client.post("/api/record/toggle")
+        self.assertEqual(r.get_json()["action"], "stopped")
+
+    def test_shortcut_default_and_validation(self):
+        self.assertEqual(self.client.get("/api/shortcut").get_json(),
+                         {"enabled": True, "key": "L", "mods": ["cmd"]})
+        bad = [{"key": "L", "mods": []}, {"key": "L", "mods": ["shift"]},
+               {"key": "LL", "mods": ["cmd"]}, {"key": "L", "mods": ["hyper"]}]
+        for b in bad:
+            self.assertEqual(self.client.post("/api/shortcut", json=b).status_code, 400, b)
+        r = self.client.post("/api/shortcut", json={"key": "r", "mods": ["shift", "ctrl"]})
+        self.assertEqual(r.get_json(), {"enabled": True, "key": "R", "mods": ["ctrl", "shift"]})
+        self.assertEqual(self.client.get("/api/shortcut").get_json()["key"], "R")
+
+
+class FastResume(Base):
+    def test_paused_lecture_reuses_its_mic_without_a_test(self):
+        recorder = importlib.import_module("lectern.recorder")
+        audio = importlib.import_module("lectern.audio")
+        lec = self.storage.Lecture.create("Paused", state="paused")
+        self.storage.atomic_write_json(lec.work / "recording.json", {"device_name": "MacBook Air Microphone"})
+        devs = [audio.Device(0, "BlackHole 2ch"), audio.Device(1, "MacBook Air Microphone")]
+        with mock.patch.object(audio, "list_audio_devices", lambda use_cache=True: devs):
+            d = recorder.Recorder._resume_device(lec, "paused")
+            self.assertEqual(d.name, "MacBook Air Microphone")
+            # a finished lecture, or a mic that is gone, takes the slow, tested path
+            self.assertIsNone(recorder.Recorder._resume_device(lec, "complete"))
+        with mock.patch.object(audio, "list_audio_devices", lambda use_cache=True: devs[:1]):
+            self.assertIsNone(recorder.Recorder._resume_device(lec, "paused"))
