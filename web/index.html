@@ -26,6 +26,7 @@
     <button id="stopBtn" class="danger">Stop</button>
   </div>
   <button id="settingsBtn" class="ghost" title="Settings: speech model, diagnostics" aria-label="Settings">⚙</button>
+  <button id="importBtn" class="ghost" title="Transcribe a downloaded lecture video or audio file">Import</button>
   <button id="newBtn" class="primary">Record a lecture</button>
 </header>
 
@@ -128,6 +129,26 @@
     <menu>
       <button type="button" value="cancel" class="ghost" data-close>Cancel</button>
       <button id="goBtn" value="go" class="primary" disabled>Start recording</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="importDlg">
+  <form method="dialog" id="importForm">
+    <h3>Import a recording</h3>
+    <label>Files<input id="iFiles" type="file" accept="audio/*,video/*,.mp4,.mov,.m4a,.mp3,.wav,.webm,.mkv" multiple required></label>
+    <label>Class<select id="iFolder"></select></label>
+    <label id="iTitleWrap">Lecture title<input id="iTitle" placeholder="Defaults to the file name"></label>
+    <p class="hint">For downloaded lecture videos or audio (Panopto, Zoom, Canvas, voice memos).
+    Only the sound is kept, and nothing leaves this computer. Check your school's policy before
+    downloading course videos.</p>
+    <div id="iProgress" class="hidden">
+      <div class="job-row"><span id="iLabel"></span><span id="iPct"></span></div>
+      <div class="bar-track"><i id="iFill"></i></div>
+    </div>
+    <menu>
+      <button type="button" class="ghost" data-close>Cancel</button>
+      <button id="iGo" value="go" class="primary">Import</button>
     </menu>
   </form>
 </dialog>

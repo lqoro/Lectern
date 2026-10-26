@@ -439,7 +439,7 @@ async function refreshLecture(first) {
     $("jobPct").textContent = job.percent ? `${job.percent}%` : "";
     $("jobFill").style.width = `${job.percent || 0}%`;
     $("jobHint").textContent =
-      "Transcribing runs on the M1 GPU at roughly 7× real time. You can leave this page.";
+      "This runs in the background on this computer. You can leave this page.";
     setTimeout(() => refreshLecture(false), 1200);
   } else if (job && job.error) {
     box.classList.remove("hidden");
@@ -777,7 +777,7 @@ function renderLibrary() {
   for (const l of list) {
     const li = document.createElement("li");
     li.className = "card";
-    const busy = ["concatenating", "transcribing", "noting", "archiving"].includes(l.state);
+    const busy = ["importing", "concatenating", "transcribing", "noting", "archiving"].includes(l.state);
     li.innerHTML = `
       <div style="min-width:0">
         <div class="t1">${esc(l.title)}${
@@ -1211,3 +1211,72 @@ $("diagBtn").onclick = async () => {
     toast("Diagnostics copied. Paste them into your bug report.");
   } catch (e) { toast(e.message || "Could not collect diagnostics."); }
 };
+
+/* ------------------------------------------------------------ import */
+// The file goes up as the raw request body (not multipart) so the backend can
+// stream it straight to disk. XMLHttpRequest, because fetch has no upload progress.
+function uploadOne(file, title, folder, onPct) {
+  return new Promise((resolve, reject) => {
+    const q = new URLSearchParams({ title, folder, filename: file.name });
+    const x = new XMLHttpRequest();
+    x.open("POST", `/api/import?${q}`);
+    x.setRequestHeader("content-type", "application/octet-stream");
+    x.upload.onprogress = (e) => { if (e.lengthComputable) onPct(Math.round(100 * e.loaded / e.total)); };
+    x.onload = () => {
+      let body = {};
+      try { body = JSON.parse(x.responseText); } catch { /* not json */ }
+      if (x.status >= 200 && x.status < 300) resolve(body);
+      else reject(new Error(body.error || `upload failed (${x.status})`));
+    };
+    x.onerror = () => reject(new Error("upload failed — is Lectern still running?"));
+    x.send(file);
+  });
+}
+
+const titleFromName = (n) => n.replace(/\.[^.]+$/, "").replace(/[_]+/g, " ").trim() || "Imported lecture";
+
+$("importBtn").onclick = async () => {
+  $("iFiles").value = ""; $("iTitle").value = "";
+  $("iProgress").classList.add("hidden");
+  $("iGo").disabled = false;
+  await refreshFolders();
+  const def = L.sel === ALL || !folderNames().includes(L.sel) ? "" : L.sel;
+  $("iFolder").innerHTML = folderOptions(def, { withNew: false });
+  $("iFolder").value = def;
+  $("iTitleWrap").classList.remove("hidden");
+  $("importDlg").showModal();
+};
+
+$("iFiles").addEventListener("change", () => {
+  const fs = $("iFiles").files;
+  // One title only makes sense for one file; several are titled by file name.
+  $("iTitleWrap").classList.toggle("hidden", fs.length > 1);
+  if (fs.length === 1 && !$("iTitle").value) $("iTitle").placeholder = titleFromName(fs[0].name);
+});
+
+$("importForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const files = [...$("iFiles").files];
+  if (!files.length) return;
+  const folder = $("iFolder").value;
+  $("iGo").disabled = true;
+  $("iProgress").classList.remove("hidden");
+  let first = null, failed = 0;
+  for (const [i, f] of files.entries()) {
+    const title = files.length === 1 && $("iTitle").value.trim() ? $("iTitle").value.trim() : titleFromName(f.name);
+    $("iLabel").textContent = files.length > 1 ? `Uploading ${i + 1} of ${files.length}: ${f.name}` : `Uploading ${f.name}`;
+    try {
+      const r = await uploadOne(f, title, folder, (p) => {
+        $("iPct").textContent = `${p}%`; $("iFill").style.width = `${p}%`;
+      });
+      first = first || r.lecture_id;
+    } catch (err) { failed++; toast(`${f.name}: ${err.message}`, 7000); }
+  }
+  $("importDlg").close();
+  loadLibrary();
+  if (first) {
+    toast(failed ? `Imported ${files.length - failed} of ${files.length}. Transcribing now…`
+                 : "Imported. Transcribing now — you can leave this page.", 5200);
+    openLecture(first);
+  }
+});

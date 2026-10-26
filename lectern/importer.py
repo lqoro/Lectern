@@ -70,20 +70,27 @@ def extract(lec: Lecture, *, duration_s: float = 0.0, progress_cb=None) -> Path:
          # +bitexact at the OUTPUT position, or the header is 78 bytes, not 44.
          "-fflags", "+bitexact", "-f", "wav",
          "-progress", "pipe:1", "-nostats", str(part)])
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            text=True, bufsize=1, **extra)
-    for line in proc.stdout:                       # type: ignore[union-attr]
-        if progress_cb and duration_s > 0 and line.startswith("out_time_us="):
-            try:
-                done = int(line.split("=", 1)[1]) / 1e6
-            except ValueError:
-                continue
-            try:
-                progress_cb(min(100, int(100 * done / duration_s)))
-            except Exception:
-                pass
-    err = proc.stderr.read() if proc.stderr else ""     # type: ignore[union-attr]
-    rc = proc.wait()
+    # stderr goes to a file, not a pipe: a chatty ffmpeg could otherwise fill
+    # the pipe buffer and deadlock while we are only reading stdout.
+    errlog = lec.work / "import.stderr.log"
+    with open(errlog, "w") as ef, subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=ef, text=True, bufsize=1,
+            **extra) as proc:
+        for line in proc.stdout:                   # type: ignore[union-attr]
+            if progress_cb and duration_s > 0 and line.startswith("out_time_us="):
+                try:
+                    done = int(line.split("=", 1)[1]) / 1e6
+                except ValueError:
+                    continue
+                try:
+                    progress_cb(min(100, int(100 * done / duration_s)))
+                except Exception:
+                    pass
+        rc = proc.wait()
+    try:
+        err = errlog.read_text()
+    except OSError:
+        err = ""
     if rc != 0 or not part.is_file() or part.stat().st_size <= 44:
         part.unlink(missing_ok=True)
         raise ImportError_(f"could not extract the audio: {err.strip()[-300:] or rc}")

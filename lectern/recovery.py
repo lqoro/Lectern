@@ -187,6 +187,7 @@ def _reverify(lec: Lecture) -> bool:
 _DELETABLE_GLOBS = ("seg-*.wav",)
 _DELETABLE_NAMES = ("master.wav", "master.wav.part", "concat.manifest.json",
                     "import-source", "import-source.part", "import.wav.part",
+                    "import.stderr.log",
                     "whisper.raw.json", "whisper.stderr.log", "record.stderr.log",
                     "recording.json", "stage", ".metadata_never_index")
 

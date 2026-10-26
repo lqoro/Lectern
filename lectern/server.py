@@ -16,7 +16,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
-from . import audio, config, hardware, models, storage
+from . import audio, config, hardware, importer, models, storage
 from .pipeline import PIPELINE
 from .recorder import RECORDER, RecorderBusy
 from .storage import Lecture
@@ -152,6 +152,53 @@ def api_record_start():
                         "detail": e.detail}), 400
     except Exception as e:
         return jsonify({"error": str(e), "kind": "error"}), 500
+
+
+@app.post("/api/import")
+def api_import():
+    """Import a downloaded lecture video or audio file.
+
+    The body is the raw file (not multipart), so it streams straight to disk
+    with no temporary copy; title and folder come in the query string. The
+    browser sends it with XMLHttpRequest to show upload progress.
+    """
+    title = (request.args.get("title") or "").strip() or "Imported lecture"
+    folder = (request.args.get("folder") or "").strip()
+    filename = (request.args.get("filename") or "").strip()[:200]
+    length = request.content_length
+    if not length:
+        return jsonify({"error": "empty upload"}), 400
+    if storage.free_bytes() < length * 1.3 + config.MIN_FREE_BYTES_STOP:
+        return jsonify({"error": "not enough free disk space for this file"}), 507
+    with _MOVE_LOCK:
+        lec = Lecture.create(title, "", folder, state="importing",
+                             source={"kind": "import", "filename": filename})
+    part = lec.work / (importer.SOURCE_NAME + ".part")
+    got = 0
+    try:
+        with open(part, "wb") as f:
+            while True:
+                block = request.stream.read(1 << 20)
+                if not block:
+                    break
+                f.write(block)
+                got += len(block)
+    except Exception as e:                 # disk error, or the client went away
+        lec.set_state("failed", failure="the upload did not finish; import the file again")
+        return jsonify({"error": f"upload failed: {e}"}), 400
+    if got != length:
+        # Never hand a truncated file to the pipeline.
+        lec.set_state("failed", failure="the upload did not finish; import the file again")
+        return jsonify({"error": "the upload did not finish"}), 400
+    part.replace(importer.source_path(lec))
+    try:
+        importer.probe(importer.source_path(lec))
+    except importer.ImportError_ as e:
+        lec.set_state("failed", failure=str(e))
+        return jsonify({"error": str(e), "lecture_id": lec.id}), 415
+    with _MOVE_LOCK:
+        job = PIPELINE.submit_import(lec.id)
+    return jsonify({"lecture_id": lec.id, "job": job})
 
 
 @app.post("/api/record/stop")
@@ -315,7 +362,7 @@ def api_delete(lecture_id: str):
         if RECORDER.current_lecture_id() == lecture_id:
             return jsonify({"error": "this lecture is currently recording — "
                                      "stop or pause it first"}), 409
-        if PIPELINE.is_running(lecture_id):
+        if PIPELINE.is_running(lecture_id) or lec.manifest().get("state") == "importing":
             return jsonify({"error": "this lecture is still processing — "
                                      "wait for it to finish first"}), 409
         dest = lec.trash()
@@ -490,7 +537,8 @@ def _busy(lecture_id: str) -> bool:
             or not _STARTUP_DONE.is_set()):
         return True
     try:
-        return Lecture.load(lecture_id).manifest().get("state") == "recording"
+        # "importing": the upload may still be streaming into .work.
+        return Lecture.load(lecture_id).manifest().get("state") in ("recording", "importing")
     except (FileNotFoundError, ValueError):
         return False
 

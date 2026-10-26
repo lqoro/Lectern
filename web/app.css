@@ -110,10 +110,10 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
 dialog{border:1px solid var(--line);border-radius:14px;padding:0;background:var(--panel);
   color:var(--ink);max-width:460px;width:92vw}
 dialog::backdrop{background:rgba(0,0,0,.35)}
-#newForm{padding:20px}
-#newForm h3{margin:0 0 14px;font-size:17px}
-#newForm label{display:block;font-size:13px;color:var(--muted);margin-bottom:12px}
-#newForm input{width:100%;margin-top:5px;color:var(--ink)}
+#newForm,#importForm{padding:20px}
+#newForm h3,#importForm h3{margin:0 0 14px;font-size:17px}
+#newForm label,#importForm label{display:block;font-size:13px;color:var(--muted);margin-bottom:12px}
+#newForm input,#importForm input,#importForm select{width:100%;margin-top:5px;color:var(--ink)}
 menu{display:flex;gap:8px;justify-content:flex-end;margin:16px 0 0;padding:0}
 .mic{font-size:13px;padding:9px 11px;border-radius:8px;background:var(--bg);
   border:1px solid var(--line);color:var(--muted)}

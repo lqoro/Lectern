@@ -31,8 +31,11 @@ def main() -> int:
     print("", file=sys.stderr)
     # threads>1 matters: audio streaming with Range must not block the API
     # that the recording indicator polls.
+    # max_request_body_size: waitress refuses bodies over 1 GB by default,
+    # which a long lecture video easily exceeds (see /api/import).
     serve(app, host=config.HOST, port=config.PORT, threads=8,
-          ident="Lectern", clear_untrusted_proxy_headers=True)
+          ident="Lectern", clear_untrusted_proxy_headers=True,
+          max_request_body_size=16 * 1024**3)
     return 0
 
 
