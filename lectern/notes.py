@@ -88,9 +88,15 @@ def available() -> bool:
         with urllib.request.urlopen(req, timeout=4) as r:
             tags = json.loads(r.read())
         names = {m.get("name", "") for m in tags.get("models", [])}
-        return any(n.split(":")[0] == config.LLM_MODEL.split(":")[0] for n in names)
+        return _tag(config.LLM_MODEL) in {_tag(n) for n in names}
     except Exception:
         return False
+
+
+def _tag(name: str) -> str:
+    """Exact ollama model tag ("qwen3:4b" and "qwen3:14b" are different
+    models; a bare name means ":latest")."""
+    return name if ":" in name else f"{name}:latest"
 
 
 def _chat(system: str, user: str, schema: dict, *, timeout: float = 900,
