@@ -1,0 +1,7 @@
+flask>=3.0
+waitress>=3.0
+# Portable recorder. Required on Windows and Linux; optional on macOS, where the
+# built-in Swift helper is used unless LECTERN_CAPTURE=python.
+sounddevice>=0.5
+numpy>=1.26
+psutil>=5.9

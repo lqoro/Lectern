@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lectern</title>
+<link rel="stylesheet" href="/web/app.css">
+<link rel="manifest" href="/web/manifest.webmanifest">
+<meta name="theme-color" content="#3b6ef5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lectern">
+<link rel="apple-touch-icon" href="/web/icon-180.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/web/icon-512.png">
+</head>
+<body>
+<header class="bar">
+  <button id="backBtn" class="ghost hidden" title="Back to library">‹</button>
+  <h1 id="appTitle">Lectern</h1>
+  <div class="grow"></div>
+  <div id="recPill" class="pill hidden">
+    <span class="dot"></span>
+    <span id="recTime">00:00</span>
+    <span class="meter"><i id="meterFill"></i></span>
+    <button id="pauseBtn" class="ghost" title="Pause — resume any time, nothing is lost">Pause</button>
+    <button id="stopBtn" class="danger">Stop</button>
+  </div>
+  <button id="settingsBtn" class="ghost" title="Settings: speech model, diagnostics" aria-label="Settings">⚙</button>
+  <button id="newBtn" class="primary">Record a lecture</button>
+</header>
+
+<main id="main">
+  <!-- LIBRARY -->
+  <section id="library" class="view">
+    <aside class="sidebar">
+      <div class="side-head">Classes</div>
+      <ul id="folderList" class="folders"></ul>
+      <button id="newFolderBtn" class="ghost addfolder">+ New class</button>
+      <div class="side-foot" id="storageLine"></div>
+    </aside>
+    <div class="lib-main">
+      <div id="libEmpty" class="empty hidden">
+        <h2>No lectures yet</h2>
+        <p>Hit <b>Record a lecture</b> when class starts. Everything stays on this Mac.</p>
+      </div>
+      <ul id="lectureList" class="cards"></ul>
+    </div>
+  </section>
+
+  <!-- READER -->
+  <section id="reader" class="view hidden">
+    <div class="reader-head">
+      <div class="title-row">
+        <h2 id="lecTitle">…</h2>
+        <input id="lecTitleEdit" class="title-edit hidden">
+        <button id="renameBtn" class="icon-btn" title="Rename">✎</button>
+        <div class="grow"></div>
+        <div class="dl-menu">
+          <button id="dlBtn" class="icon-btn" title="Download files">⭳</button>
+          <div id="dlList" class="dl-list hidden"></div>
+        </div>
+        <button id="deleteBtn" class="icon-btn danger-hover" title="Delete lecture">🗑</button>
+      </div>
+      <div id="lecMeta" class="meta"></div>
+      <div class="class-row">
+        <label for="lecFolder">Class</label>
+        <select id="lecFolder" title="Move this lecture to another class"></select>
+        <span id="lecFolderNote" class="hint"></span>
+      </div>
+      <div id="lecBanner" class="banner hidden"></div>
+      <div id="resumeBox" class="resume-box hidden">
+        <span id="resumeText"></span>
+        <button id="finishBtn" class="ghost tiny hidden" title="Transcribe and write notes from what was recorded, without recording more">Finish &amp; transcribe</button>
+        <button id="resumeBtn" class="primary tiny">Continue recording</button>
+      </div>
+    </div>
+    <div id="jobBox" class="job hidden">
+      <div class="job-row"><span id="jobStage">working…</span><span id="jobPct"></span></div>
+      <div class="bar-track"><i id="jobFill"></i></div>
+      <p class="hint" id="jobHint"></p>
+    </div>
+    <div class="tabs" id="paneTabs">
+      <button data-tab="notes" class="on">Notes</button>
+      <button data-tab="transcript">Transcript</button>
+    </div>
+    <div class="panes" id="panes" data-tab="notes">
+      <div class="pane notes-pane" tabindex="0">
+        <h3>Notes</h3>
+        <div id="notes" class="notes">
+          <p class="muted">Study notes arrive in a later milestone. The transcript on
+          the right is fully clickable now — click any word to jump the audio there.</p>
+        </div>
+      </div>
+      <div class="pane transcript-pane" tabindex="0">
+        <div class="pane-head">
+          <h3>Transcript</h3>
+          <button id="jumpNow" class="tiny hidden" title="Scroll back to what is playing and follow along">Jump to current</button>
+          <label class="follow"><input type="checkbox" id="followChk" checked> Follow audio</label>
+        </div>
+        <div id="transcript" class="transcript"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer id="player" class="player hidden">
+  <button id="playBtn" class="play">▶</button>
+  <span id="curTime" class="t">0:00</span>
+  <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1">
+  <span id="durTime" class="t">0:00</span>
+  <select id="rate" title="Playback speed">
+    <option value="1">1×</option><option value="1.25">1.25×</option>
+    <option value="1.5">1.5×</option><option value="1.75">1.75×</option>
+    <option value="2">2×</option>
+  </select>
+  <audio id="audio" preload="metadata"></audio>
+</footer>
+
+<!-- New recording dialog -->
+<dialog id="newDlg">
+  <form method="dialog" id="newForm">
+    <h3>New recording</h3>
+    <label>Class<select id="fFolder"></select></label>
+    <label id="fNewFolderWrap" class="hidden">New class name<input id="fNewFolder" placeholder="e.g. RELI 101" maxlength="60"></label>
+    <label>Lecture title<input id="fTitle" placeholder="e.g. Week 8 — The Exodus" required></label>
+    <p class="hint" id="fFolderHint"></p>
+    <div id="micStatus" class="mic">Checking microphone…</div>
+    <menu>
+      <button type="button" value="cancel" class="ghost" data-close>Cancel</button>
+      <button id="goBtn" value="go" class="primary" disabled>Start recording</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="folderDlg">
+  <form method="dialog" id="folderForm">
+    <h3 id="folderDlgTitle">New class folder</h3>
+    <label>Name<input id="fFolderName" placeholder="e.g. BIO 201" required></label>
+    <p class="hint">This creates a real folder in ~/Lectures, so you will see it in Finder too.</p>
+    <menu>
+      <button type="button" value="cancel" class="ghost" data-close>Cancel</button>
+      <button value="go" class="primary">Create</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="deleteDlg">
+  <form method="dialog" id="deleteForm">
+    <h3>Delete this lecture?</h3>
+    <p class="hint" id="deleteWhat"></p>
+    <p class="hint">It moves to <code>~/Lectures/.trash</code> and is fully
+    recoverable for 7 days — just move the folder back in Finder. Nothing is
+    permanently deleted right away.</p>
+    <menu>
+      <button value="cancel" class="ghost">Cancel</button>
+      <button value="go" class="danger">Delete</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="settingsDlg">
+  <div class="set-wrap">
+    <h3>Settings</h3>
+    <h4>Speech model</h4>
+    <p class="hint" id="setHw">Checking this computer…</p>
+    <p class="hint">The model turns speech into text. Bigger is more accurate but slower and
+    needs more memory. Downloads only happen when you press a button.</p>
+    <ul id="modelList" class="models"></ul>
+    <div id="dlProgress" class="hidden">
+      <div class="job-row"><span id="dlLabel"></span><button id="dlCancel" class="ghost tiny">Cancel</button></div>
+      <div class="bar-track"><i id="dlFill"></i></div>
+    </div>
+    <p class="hint err hidden" id="dlError"></p>
+    <h4>Help</h4>
+    <p class="hint">Copy system details to paste into a bug report. Nothing is sent
+    anywhere; no lecture content is included.</p>
+    <menu>
+      <button type="button" id="diagBtn">Copy diagnostics</button>
+      <button type="button" class="primary" data-close>Done</button>
+    </menu>
+  </div>
+</dialog>
+
+<div id="toast" class="toast hidden"></div>
+<script type="module" src="/web/app.js"></script>
+</body>
+</html>

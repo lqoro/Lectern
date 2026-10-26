@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Local backups of earlier code (some contain lecture output)
+backup-*.tar.gz
+
+# Benchmark inputs and outputs: model files (GBs) and real lecture audio/transcripts
+bench/models/
+bench/work/
+bench/gold.txt
+
+# Machine-local
+.DS_Store
+.claude/
