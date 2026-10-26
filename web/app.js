@@ -1259,11 +1259,30 @@ $("importBtn").onclick = async () => {
   $("iGo").disabled = false;
   await refreshFolders();
   const def = L.sel === ALL || !folderNames().includes(L.sel) ? "" : L.sel;
-  $("iFolder").innerHTML = folderOptions(def, { withNew: false });
+  $("iFolder").innerHTML = folderOptions(def, { withNew: true });
   $("iFolder").value = def;
+  $("iNewFolder").value = "";
+  syncImportFolderUi();
   $("iTitleWrap").classList.remove("hidden");
   $("importDlg").showModal();
 };
+
+function syncImportFolderUi() {
+  const v = $("iFolder").value;
+  const isNew = v === NEW_CLASS;
+  $("iNewFolderWrap").classList.toggle("hidden", !isNew);
+  $("iNewFolder").required = isNew;
+  const name = isNew ? cleanFolder($("iNewFolder").value) : v;
+  $("iFolderHint").textContent = isNew
+    ? (name ? `Creates the class "${name}" and files the import there.` : "Type a name for the new class.")
+    : (v ? `Saved in ~/Lectures/${v}.` : "Not filed under a class — you can move it later.");
+}
+
+$("iFolder").addEventListener("change", () => {
+  syncImportFolderUi();
+  if ($("iFolder").value === NEW_CLASS) $("iNewFolder").focus();
+});
+$("iNewFolder").addEventListener("input", syncImportFolderUi);
 
 $("iFiles").addEventListener("change", () => {
   const fs = $("iFiles").files;
@@ -1276,7 +1295,11 @@ $("importForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const files = [...$("iFiles").files];
   if (!files.length) return;
-  const folder = $("iFolder").value;
+  let folder = $("iFolder").value;
+  if (folder === NEW_CLASS) {
+    folder = cleanFolder($("iNewFolder").value);
+    if (!folder) { toast("Type a name for the new class."); $("iNewFolder").focus(); return; }
+  }
   $("iGo").disabled = true;
   $("iProgress").classList.remove("hidden");
   let first = null, failed = 0;

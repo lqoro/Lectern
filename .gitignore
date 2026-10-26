@@ -14,3 +14,4 @@ bench/gold.txt
 # Machine-local
 .DS_Store
 .claude/
+x-post-draft.md
