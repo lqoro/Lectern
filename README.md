@@ -36,6 +36,12 @@ In a lecture: **Space** play/pause, **← / →** back/forward 5 s (Shift: 30 s)
 **[ / ]** slower/faster (0.5× – 2×, pitch kept natural), **\\** back to 1×.
 The speed is remembered for every lecture.
 
+## Build the Mac app (work in progress)
+
+`packaging/macos/build_app.py` builds a self-contained `Lectern.app` and DMG with
+whisper, ffmpeg and the mic helper inside, so nobody needs Homebrew. It is signed
+ad hoc for now; see [`packaging/macos/README.md`](packaging/macos/README.md).
+
 ## Quick record from anywhere (menu bar + shortcut)
 
 ```bash

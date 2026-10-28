@@ -10,6 +10,10 @@
 //   * start = POST /api/record/toggle (auto-titled, no dialog), same key stops
 //
 // Usage: LecternMenu --repo <path to the Lectern folder> [--port 8477]
+//
+// Inside Lectern.app (packaging/macos/build_app.py) it needs no --repo: it runs
+// the bundled server in Contents/Resources/backend, points it at the bundled
+// tools in Contents/Resources/bin, and opens Lectern once the server answers.
 
 import AppKit
 import Carbon.HIToolbox
@@ -28,6 +32,12 @@ do {
     }
 }
 let base = URL(string: "http://127.0.0.1:\(port)")!
+
+// Lectern.app ships the server and its tools inside the bundle.
+let resources = Bundle.main.resourceURL ?? URL(fileURLWithPath: "/nonexistent")
+let bundledServer = resources.appendingPathComponent("backend/lectern-server/lectern-server")
+let bundledBin = resources.appendingPathComponent("bin")
+let isBundled = FileManager.default.isExecutableFile(atPath: bundledServer.path)
 
 // ---------------------------------------------------------------------- http
 func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
@@ -51,8 +61,7 @@ func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
 func ensureServer(_ then: @escaping (Bool) -> Void) {
     request("api/status", timeout: 1.5) { _, code in
         if code == 200 { return then(true) }
-        guard !repo.isEmpty else { return then(false) }
-        let py = URL(fileURLWithPath: repo).appendingPathComponent(".venv/bin/python")
+        guard isBundled || !repo.isEmpty else { return then(false) }
         let logs = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Lectern/logs")
         try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
@@ -61,9 +70,18 @@ func ensureServer(_ then: @escaping (Bool) -> Void) {
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
         }
         let p = Process()
-        p.executableURL = py
-        p.arguments = ["-m", "lectern"]
-        p.currentDirectoryURL = URL(fileURLWithPath: repo)
+        if isBundled {
+            p.executableURL = bundledServer
+            p.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+            var env = ProcessInfo.processInfo.environment
+            env["LECTERN_BIN_DIR"] = bundledBin.path
+            env["LECTERN_PORT"] = String(port)
+            p.environment = env
+        } else {
+            p.executableURL = URL(fileURLWithPath: repo).appendingPathComponent(".venv/bin/python")
+            p.arguments = ["-m", "lectern"]
+            p.currentDirectoryURL = URL(fileURLWithPath: repo)
+        }
         if let log = try? FileHandle(forWritingTo: logURL) {
             log.seekToEndOfFile()
             p.standardOutput = log
@@ -153,6 +171,8 @@ final class Controller: NSObject, NSMenuDelegate {
             self?.online = ok
             self?.refreshShortcut()
             self?.poll()
+            // Opening Lectern.app should open Lectern, not just a menu bar icon.
+            if ok && isBundled { NSWorkspace.shared.open(base) }
         }
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.refreshShortcut()
@@ -289,7 +309,17 @@ final class Controller: NSObject, NSMenuDelegate {
     }
 }
 
+/// Double-clicking Lectern.app again while it runs opens Lectern again.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if isBundled { ensureServer { _ in NSWorkspace.shared.open(base) } }
+        return false
+    }
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)           // menu bar only, no Dock icon
+let delegate = AppDelegate()
+app.delegate = delegate
 let controller = Controller()
 app.run()

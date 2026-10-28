@@ -14,3 +14,7 @@ HANDOFF.md
 .DS_Store
 .claude/
 x-post-draft.md
+
+# Lectern.app builds (packaging/macos/build_app.py)
+/build/
+/dist/

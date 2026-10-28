@@ -5,6 +5,20 @@ software and models below. Lectern does **not** include or redistribute any of
 the separately installed tools or models: you install them yourself (with
 `install.sh`, Homebrew, pip or Ollama), and each one stays under its own licence.
 
+## Included in the Lectern.app download
+
+The Mac app (built with `packaging/macos/build_app.py`) bundles these, unmodified
+and built from their official sources. Their licence texts are inside the app
+under `Contents/Resources/licenses`.
+
+| Component | Version | Licence |
+|---|---|---|
+| [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (incl. ggml) | v1.9.1 | MIT |
+| [FFmpeg](https://ffmpeg.org) (`ffmpeg`, `ffprobe`) | n8.1.3, built without GPL or non-free parts | LGPL-2.1-or-later. Source: the tag above at https://github.com/FFmpeg/FFmpeg, configured as in `build_app.py` |
+| Python and the packages below, frozen with [PyInstaller](https://pyinstaller.org) | | Python: PSF License. PyInstaller's bootloader: GPL-2.0 with an exception that allows bundling |
+
+Speech models and the notes model are still downloaded only when you ask.
+
 ## Installed separately (not distributed with Lectern)
 
 | Component | Used for | Licence |
