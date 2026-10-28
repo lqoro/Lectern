@@ -14,3 +14,7 @@ HANDOFF.md
 .DS_Store
 .claude/
 x-post-draft.md
+
+# Windows beta build output
+build/
+dist/

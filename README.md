@@ -147,6 +147,13 @@ You also need `ffmpeg` and `whisper-cli` (whisper.cpp) on your PATH, or set
 `LECTERN_FFMPEG` / `LECTERN_WHISPER` / `LECTERN_BIN_DIR`. Set
 `LECTERN_CAPTURE=python` to try the portable recorder on a Mac.
 
+**Windows beta zip.** `python3 packaging/build_windows.py` (runs on any OS)
+builds `dist/Lectern-<version>-windows-x64-beta.zip`: Python, every dependency,
+ffmpeg, whisper.cpp and the MSVC runtime in one folder. Unzip and double-click
+`Lectern.bat`; nothing else to install. CI builds the same zip on Windows and
+runs `packaging/smoke_windows.ps1`, which speaks a short lecture with Windows'
+own voice, imports it and checks the transcript, export and archive.
+
 ## Your recording cannot be lost by closing the browser
 
 The browser is only a remote control. `ffmpeg` does the recording in its own
