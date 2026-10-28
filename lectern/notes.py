@@ -259,7 +259,8 @@ def generate(t: dict, *, progress_cb=None) -> dict:
         return extractive(t, reason="offline")
     if mode != "llm":
         total = hardware.total_ram_bytes()
-        if total is not None and total < MIN_TOTAL_RAM_BYTES:
+        eff = hardware.effective_ram_bytes(total)   # Mac terms: Windows needs ~2x
+        if eff is not None and eff < MIN_TOTAL_RAM_BYTES:
             log.warning("%d MB RAM in total; skipping the language model",
                         total // 2**20)
             return extractive(t, reason=f"this computer has too little memory "

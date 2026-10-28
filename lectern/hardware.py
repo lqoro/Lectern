@@ -43,6 +43,24 @@ def total_ram_bytes() -> int | None:
     return None
 
 
+# How much of a GB counts, in Mac terms, when deciding what fits. macOS
+# compresses memory and Apple chips share it with the GPU, so an 8 GB Mac runs
+# what a Windows PC needs about 16 GB for: Windows itself, its services and the
+# browser take far more of the same RAM. Every RAM tier in Lectern (model
+# recommendation, what "fits", whether AI notes run) was measured on an 8 GB
+# M1, so other systems are scaled into those terms instead of each tier
+# carrying per-OS numbers.
+RAM_FACTOR = {"Darwin": 1.0, "Windows": 0.5}
+
+
+def effective_ram_bytes(total: int | None = None, os_name: str | None = None) -> int | None:
+    """Total RAM expressed as the Mac memory it is worth to Lectern."""
+    total = total_ram_bytes() if total is None else total
+    if not total:
+        return None
+    return int(total * RAM_FACTOR.get(os_name or platform.system(), 1.0))
+
+
 def available_ram_bytes() -> int | None:
     """RAM that could be used right now without swapping. On macOS this
     UNDERSTATES what is usable (compressed/cached pages are reclaimed on
@@ -195,11 +213,13 @@ def device() -> dict:
 
 def snapshot() -> dict:
     total, avail = total_ram_bytes(), available_ram_bytes()
+    eff = effective_ram_bytes(total)
     return {
         "os": platform.system(),
         "machine": platform.machine(),
         "python": sys.version.split()[0],
         "ram_total_mb": round(total / 2**20) if total else None,
+        "ram_effective_mb": round(eff / 2**20) if eff else None,
         "ram_available_mb": round(avail / 2**20) if avail else None,
         "cpu_cores": cpu_cores(),
         "cpu_threads": cpu_threads(),

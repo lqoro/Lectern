@@ -127,9 +127,14 @@ def fits(model: Model, total_ram_bytes: int | None) -> bool:
     return model.ram_mb * 2**20 <= 0.35 * total_ram_bytes
 
 
+def effective_mb(hw: dict) -> int:
+    """RAM in Mac terms (see hardware.RAM_FACTOR); the tiers below are Mac-measured."""
+    return hw.get("ram_effective_mb") or hw.get("ram_total_mb") or 0
+
+
 def recommend(hw: dict | None = None) -> Model:
     hw = hw or hardware.snapshot()
-    ram_gb = (hw.get("ram_total_mb") or 0) / 1024
+    ram_gb = effective_mb(hw) / 1024
     accel = hw.get("accelerator") or "cpu"
     cores = hw.get("cpu_cores") or 2
     if accel != "cpu":
@@ -192,6 +197,8 @@ def recommend_why(m: Model, hw: dict) -> str:
     else:
         base = (f"No supported GPU, {cores} CPU cores and {ram_gb} GB: "
                 f"the {m.label.lower()} model keeps transcription reasonably quick.")
+    if hw.get("os") == "Windows":
+        base += " Windows needs about twice the memory a Mac does for the same model."
     return base + took
 
 
@@ -213,7 +220,7 @@ def active() -> tuple[Path | None, Model | None, str]:
     if p := installed_path(rec):
         return p, rec, "recommended for this computer"
     have = installed()
-    ok = [m for m in have if fits(m, (hw.get("ram_total_mb") or 0) * 2**20 or None)]
+    ok = [m for m in have if fits(m, effective_mb(hw) * 2**20 or None)]
     if ok:
         m = ok[0]
         return installed_path(m), m, "best installed model that fits this computer"
@@ -236,7 +243,7 @@ def describe() -> dict:
     hw = hardware.snapshot()
     rec = recommend(hw)
     p, cur, why = active()
-    total = (hw.get("ram_total_mb") or 0) * 2**20 or None
+    total = effective_mb(hw) * 2**20 or None
     return {
         "hardware": hw,
         "device_label": device_label(hw),

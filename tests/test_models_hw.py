@@ -74,6 +74,19 @@ class Selection(unittest.TestCase):
         self.assertEqual(r(8192, "cpu", 2), "base.en")
         self.assertEqual(r(2048, "cpu", 2), "tiny.en")
 
+    def test_windows_needs_twice_the_ram_of_a_mac(self):
+        r = lambda os_name, gb, accel, cores: self.m.recommend({
+            "os": os_name, "ram_total_mb": gb * 1024, "accelerator": accel, "cpu_cores": cores,
+            "ram_effective_mb": self.m.hardware.effective_ram_bytes(gb * 2**30, os_name) // 2**20}).id
+        # A 16 GB PC gets what an 8 GB Mac gets; an 8 GB PC what a 4 GB Mac gets.
+        self.assertEqual(r("Windows", 16, "cpu", 8), r("Darwin", 8, "cpu", 8))
+        self.assertEqual(r("Windows", 8, "cpu", 8), "base.en")
+        self.assertEqual(r("Windows", 32, "cpu", 8), "large-v3-turbo-q5_0")
+        self.assertEqual(r("Windows", 8, "cuda", 8), "small.en")
+        self.assertEqual(r("Linux", 8, "cpu", 8), "small.en")
+        self.assertEqual(self.m.hardware.effective_ram_bytes(8 * 2**30, "Darwin"), 8 * 2**30)
+        self.assertIsNone(self.m.hardware.effective_ram_bytes(0, "Windows"))
+
     def test_big_model_does_not_fit_small_machine(self):
         self.assertFalse(self.m.fits(self.m.BY_ID["large-v3-q5_0"], 4 * 2**30))
         self.assertTrue(self.m.fits(self.m.BY_ID["base.en"], 4 * 2**30))
@@ -201,6 +214,18 @@ class NotesGuards(unittest.TestCase):
         called, doc = self.run_generate(8, 1, mac=False)
         self.assertEqual(called, [])
         self.assertIn("not enough free memory", doc["fallback"])
+
+    def test_windows_needs_16gb_for_the_notes_model(self):
+        sysname = self.notes.hardware.platform.system
+        self.notes.hardware.platform.system = lambda: "Windows"
+        try:
+            called, doc = self.run_generate(8, 4, mac=False)
+            self.assertEqual(called, [])
+            self.assertIn("too little memory", doc["fallback"])
+            called, _ = self.run_generate(16, 4, mac=False)
+            self.assertEqual(called, [1])
+        finally:
+            self.notes.hardware.platform.system = sysname
 
     def test_mac_with_low_reported_free_ram_still_uses_llm(self):
         called, _ = self.run_generate(8, 1, mac=True)     # the real 8 GB M1 case
