@@ -733,7 +733,8 @@ def _startup_maintenance() -> None:
     """Recovery and the deferred WAV release. Never blocks the UI coming up."""
     from . import capture, recovery
     try:
-        if capture.ensure_built() is None:
+        # Windows/Linux record with the portable helper; only the Mac builds one.
+        if not capture.portable() and capture.ensure_built() is None:
             app.logger.error("capture helper unavailable; recordings will use "
                              "ffmpeg, which drops audio")
     except Exception:
