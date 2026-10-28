@@ -30,6 +30,12 @@ press that button. The microphone helper is compiled on first start with the
 Xcode Command Line Tools that Homebrew installs; macOS will ask for microphone
 permission the first time you record.
 
+## Playback keys
+
+In a lecture: **Space** play/pause, **← / →** back/forward 5 s (Shift: 30 s),
+**[ / ]** slower/faster (0.5× – 2×, pitch kept natural), **\\** back to 1×.
+The speed is remembered for every lecture.
+
 ## Quick record from anywhere (menu bar + shortcut)
 
 ```bash

@@ -379,3 +379,5 @@ textarea.diag{width:100%;margin-top:10px;font:12px/1.4 ui-monospace,SFMono-Regul
 .st-name small{display:block;font-size:12px;color:var(--muted);line-height:1.4}
 .st-size{font-size:13px;font-variant-numeric:tabular-nums;color:var(--ink)}
 .st-note{font-size:12px;color:var(--muted);margin:8px 0 0}
+/* speed differs from 1x: tint it so a forgotten 0.5x is noticed */
+#rate.off1{color:var(--accent);border-color:var(--accent);font-weight:600}

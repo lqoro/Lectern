@@ -114,7 +114,8 @@
   <span id="curTime" class="t">0:00</span>
   <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1">
   <span id="durTime" class="t">0:00</span>
-  <select id="rate" title="Playback speed">
+  <select id="rate" title="Playback speed (keys: [ slower, ] faster, \ normal)" aria-label="Playback speed">
+    <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
     <option value="1">1×</option><option value="1.25">1.25×</option>
     <option value="1.5">1.5×</option><option value="1.75">1.75×</option>
     <option value="2">2×</option>

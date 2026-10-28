@@ -222,7 +222,25 @@ $("seek").oninput = (e) => {
   const d = audio.duration || (R.doc ? R.doc.duration_ms / 1000 : 0);
   if (d && Number.isFinite(d)) audio.currentTime = (e.target.value / 1000) * d;
 };
-$("rate").onchange = (e) => { audio.playbackRate = parseFloat(e.target.value); };
+// Playback speed, 0.5x-2x. Remembered across lectures and restarts; set as the
+// default rate too, because loading a new src resets playbackRate to it.
+const RATES = [...$("rate").options].map((o) => parseFloat(o.value));
+function setRate(r, announce) {
+  r = RATES.includes(r) ? r : 1;
+  audio.defaultPlaybackRate = audio.playbackRate = r;
+  audio.preservesPitch = true;               // faster, not chipmunk
+  $("rate").value = String(r);
+  $("rate").classList.toggle("off1", r !== 1);
+  try { localStorage.setItem("lectern.rate", String(r)); } catch { /* private mode */ }
+  if (announce) toast(`Speed ${r}×`, 900);
+}
+function stepRate(dir) {
+  const i = RATES.indexOf(audio.playbackRate);
+  setRate(RATES[Math.max(0, Math.min(RATES.length - 1, (i < 0 ? RATES.indexOf(1) : i) + dir))], true);
+}
+$("rate").onchange = (e) => setRate(parseFloat(e.target.value));
+audio.addEventListener("loadedmetadata", () => { audio.playbackRate = audio.defaultPlaybackRate; });
+setRate(parseFloat((() => { try { return localStorage.getItem("lectern.rate"); } catch { return null; } })() || "1"));
 $("followChk").onchange = (e) => setFollow(e.target.checked);
 
 // Taking over the scroll bar means "stop following": otherwise the page would
@@ -268,6 +286,9 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Space") { e.preventDefault(); $("playBtn").click(); }
   else if (e.key === "ArrowLeft") { e.preventDefault(); audio.currentTime -= e.shiftKey ? 30 : 5; }
   else if (e.key === "ArrowRight") { e.preventDefault(); audio.currentTime += e.shiftKey ? 30 : 5; }
+  else if (e.key === "[") { e.preventDefault(); stepRate(-1); }
+  else if (e.key === "]") { e.preventDefault(); stepRate(+1); }
+  else if (e.key === "\\") { e.preventDefault(); setRate(1, true); }
 });
 
 /* -------------------------------------------------------------- notes */
