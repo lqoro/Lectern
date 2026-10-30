@@ -249,7 +249,7 @@ h4.nsec:first-child{margin-top:0}
 .nlist{list-style:none;margin:0 -8px;padding:0;display:flex;flex-direction:column;gap:1px}
 .nb{display:grid;grid-template-columns:48px 1fr;gap:8px;align-items:baseline;width:100%;height:auto;text-align:left;
   justify-content:stretch;background:transparent;border:0;border-radius:var(--radius-ctl);padding:6px 8px;
-  font-weight:400;line-height:1.5;color:var(--ink)}
+  font-weight:400;line-height:1.5;color:var(--ink);white-space:normal}
 .nb:hover{background:var(--raised)}
 .nb .nt{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;text-decoration:underline;
   text-decoration-color:var(--control);text-underline-offset:3px}
