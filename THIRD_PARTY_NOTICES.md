@@ -1,9 +1,52 @@
 # Third-party software and models
 
-Lectern itself is released under the MIT License (see `LICENSE`). It uses the
-software and models below. Lectern does **not** include or redistribute any of
-the separately installed tools or models: you install them yourself (with
-`install.sh`, Homebrew, pip or Ollama), and each one stays under its own licence.
+Lectern itself is released under the MIT License (see `LICENSE`). The Mac app
+and the Windows beta bundle the components listed in the first two sections.
+When you run Lectern from source instead, nothing is bundled: you install the
+tools yourself (with `install.sh`, Homebrew, pip or Ollama), and each one stays
+under its own licence.
+
+## Included in the Mac app (Lectern.app)
+
+The Mac app (built with `packaging/macos/build_app.py`) bundles these, unmodified
+and built from their official sources. The full licence texts are inside the app
+under `Contents/Resources/licenses` (all of them together in
+`THIRD_PARTY_LICENSES.txt`), and in the app under **Settings ▸ Legal ▸ Full
+licence texts**.
+
+| Component | Version | Licence |
+|---|---|---|
+| [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (incl. ggml) | v1.9.1 | MIT |
+| [FFmpeg](https://ffmpeg.org) (`ffmpeg`, `ffprobe`) | n8.1.3, built without GPL or non-free parts, as separate programs (not linked into Lectern) | LGPL-2.1-or-later |
+| [Python](https://www.python.org) | 3.12 | PSF License |
+| Python packages (table below), frozen with [PyInstaller](https://pyinstaller.org) | | as listed; PyInstaller's bootloader is GPL-2.0 with an exception that allows bundling |
+| [PortAudio](https://www.portaudio.com) (inside sounddevice) | | MIT-style |
+
+## Included in the Windows beta (zip)
+
+The Windows beta (built with `packaging/build_windows.py`) bundles these. Licence
+texts are in the `licenses` folder and `THIRD_PARTY_LICENSES.txt` next to
+`Lectern.bat`, and in the app under **Settings ▸ Legal**.
+
+| Component | Version | Licence |
+|---|---|---|
+| [Python](https://www.python.org) embeddable package | 3.12.10 | PSF License |
+| Python packages (table below) | | as listed |
+| [whisper.cpp](https://github.com/ggml-org/whisper.cpp) Windows binaries | b5454 | MIT |
+| [FFmpeg](https://ffmpeg.org) LGPL shared build by [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) | n8.1.3 | LGPL-2.1-or-later |
+| Microsoft Visual C++ runtime (`msvcp140.dll`, `vcomp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`) | 14.51 | © Microsoft Corporation; redistributable files under Microsoft's Visual C++ Redistributable terms |
+
+### FFmpeg source code
+
+FFmpeg is LGPL software. Its complete source for the version Lectern ships
+(tag `n8.1.3`) is available from <https://github.com/FFmpeg/FFmpeg/tree/n8.1.3>,
+and a copy is attached to every Lectern release that bundles FFmpeg. The Mac
+build's exact configuration is in `packaging/macos/build_app.py`; the Windows
+build is BtbN's published `lgpl-shared` build. Lectern runs FFmpeg as separate
+programs, so you can replace them with your own build.
+
+Speech models and the notes model are never bundled. They are downloaded only
+when you ask.
 
 ## Installed separately (not distributed with Lectern)
 
@@ -25,6 +68,7 @@ the separately installed tools or models: you install them yourself (with
 | sounddevice (bundles PortAudio on macOS and Windows) | MIT (PortAudio: MIT-style) |
 | NumPy | BSD-3-Clause (bundled libraries have their own permissive licences) |
 | psutil | BSD-3-Clause |
+| cffi, pycparser (used by sounddevice) | MIT, BSD-3-Clause |
 
 ## Apple frameworks
 
@@ -34,10 +78,11 @@ AppKit, Carbon, IOKit) under Apple's terms for macOS.
 
 ## Trademarks
 
-"Whisper" is associated with OpenAI, "Qwen" with Alibaba Cloud, "FFmpeg" with
-the FFmpeg project and "Ollama" with Ollama Inc. Lectern is an independent
-project and is not affiliated with or endorsed by any of them, or by any
-school or university.
+Apple, Mac and macOS are trademarks of Apple Inc. Windows is a trademark of
+Microsoft Corporation. "Whisper" is associated with OpenAI, "Qwen" with Alibaba
+Cloud, "FFmpeg" with the FFmpeg project and "Ollama" with Ollama Inc. Lectern is
+an independent project and is not affiliated with or endorsed by any of them, or
+by any school or university.
 
-Licence details were checked on 2026-10-26. If you spot an error, please
+Licence details were checked on 2026-10-30. If you spot an error, please
 [open an issue](https://github.com/lqoro/Lectern/issues/new?template=bug.yml).

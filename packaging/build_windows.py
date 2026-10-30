@@ -184,6 +184,19 @@ def version() -> str:
     return "0"
 
 
+def write_licences(dist: Path) -> None:
+    """Full licence texts next to Lectern.bat; the app shows them in Settings > Legal."""
+    lic = dist / "licenses"
+    for f in ("whisper.cpp-LICENSE", "portaudio-LICENSE.txt"):
+        shutil.copy2(ROOT / "packaging" / "licenses" / f, lic / f)
+    subprocess.run([sys.executable, ROOT / "packaging" / "collect_licenses.py",
+                    "--site-packages", dist / "python" / "Lib" / "site-packages",
+                    "--python-license", dist / "python" / "LICENSE.txt",
+                    "--out", dist / "THIRD_PARTY_LICENSES.txt",
+                    "--extra", f"FFmpeg (BtbN lgpl-shared build)={lic / 'ffmpeg' / 'LICENSE.txt'}"],
+                   check=True)
+
+
 def main() -> None:
     pins = json.loads(SHA_FILE.read_text()) if SHA_FILE.exists() else {}
     src = {name: fetch(name, url, pins) for name, url in PINS.items()}
@@ -196,6 +209,7 @@ def main() -> None:
     print("==> app"); copy_app(dist)
     print("==> python"); build_python(dist, src["python"])
     print("==> tools"); build_bin(dist, src["whisper"], src["ffmpeg"])
+    print("==> licences"); write_licences(dist)
 
     DIST.mkdir(exist_ok=True)
     out = DIST / f"{name}.zip"

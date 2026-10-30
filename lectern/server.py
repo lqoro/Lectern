@@ -260,7 +260,11 @@ def api_record_stop():
 # ------------------------------------------------------------ legal
 REPO_DIR = WEB_DIR.parent
 LEGAL_DOCS = {"license": "LICENSE", "notices": "THIRD_PARTY_NOTICES.md",
-              "privacy": "PRIVACY.md", "terms": "TERMS.md"}
+              "privacy": "PRIVACY.md", "terms": "TERMS.md",
+              "texts": "THIRD_PARTY_LICENSES.txt"}   # written by the packaging scripts
+NO_TEXTS = ("Full licence texts are bundled with the Lectern downloads. In a source "
+            "checkout, each package's licence is in its own folder; see "
+            "THIRD_PARTY_NOTICES.md for the list.\n")
 # Bump when the first-run recording notice changes materially, so people
 # see the new text once.
 NOTICE_VERSION = "1"
@@ -275,6 +279,8 @@ def api_legal(doc: str):
     name = LEGAL_DOCS.get(doc)
     if not name:
         abort(404)
+    if doc == "texts" and not (REPO_DIR / name).is_file():
+        return Response(NO_TEXTS, mimetype="text/plain; charset=utf-8")
     return send_from_directory(REPO_DIR, name, mimetype="text/plain; charset=utf-8")
 
 

@@ -983,12 +983,13 @@ function renderMd(md) {
 
 async function showLegal(doc) {
   const titles = { terms: "Terms & recording notice", privacy: "Privacy",
-                   notices: "Third-party licences", license: "Lectern licence" };
+                   notices: "Third-party licences", license: "Lectern licence",
+                   texts: "Full licence texts" };
   try {
     const r = await fetch(`/api/legal/${doc}`);
     if (!r.ok) throw new Error();
     const text = await r.text();
-    $("legalText").replaceChildren(doc === "license" ? el("pre", "", text) : renderMd(text));
+    $("legalText").replaceChildren(doc === "license" || doc === "texts" ? el("pre", "", text) : renderMd(text));
   } catch { $("legalText").textContent = "Could not load this document."; }
   $("legalTitle").textContent = titles[doc] || "Legal";
   if (!$("legalDlg").open) $("legalDlg").showModal();
