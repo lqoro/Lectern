@@ -29,11 +29,10 @@ import subprocess
 import sys
 import threading
 import time
-import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import audio, capture, concat, config, storage
+from . import audio, capture, config, storage
 from . import pcm
 from . import platform_compat as pc
 from .storage import Lecture
@@ -67,6 +66,10 @@ REASON_LID = "lid closed"
 REASON_SLEEP = "system sleep"
 REASON_CRASH = "recorder stopped unexpectedly"
 REASON_DISK = "disk full"
+REASON_NO_AUDIO = "microphone stopped"
+# A mic that sends nothing this long is gone (unplugged, or a Windows stream
+# that never came back after sleep): pause, so the lecture is not stuck "recording".
+_DEAD_MIC_SECONDS = 60.0
 
 
 def lid_closed() -> bool:
@@ -112,7 +115,6 @@ class RecordingState:
     out_time_us: int = 0
     stalled: bool = False
     stop_reason: str = ""     # set BEFORE we signal the writer: the exit is ours
-    base_ms: int = 0          # audio recorded in EARLIER sessions, before a resume
     event: str = ""           # last "event=" line from the helper (lid/sleep)
     adopted_bytes: int = -1   # adopted writer: progress is file growth
     log_offset: int = 0       # record.stderr.log size when THIS writer started:
@@ -185,7 +187,6 @@ class Recorder:
                 "title": title,
                 "device": st.device_name,
                 "elapsed_s": round(elapsed, 1),
-                "audio_s": round(st.base_ms / 1000 + st.out_time_us / 1e6, 1),
                 "started_utc": st.started_utc,
                 "segments": nseg,
                 "bytes": disk,
@@ -241,23 +242,29 @@ class Recorder:
             _require_capture_helper()        # before anything is created
 
             lec = Lecture.create(title=title, course=course, folder=folder)
-            log_offset = _size(lec.work / "record.stderr.log")
             try:
-                argv = self._argv(lec, device)
-                with open(lec.work / "record.stderr.log", "ab", buffering=0) as errlog:
-                    proc = subprocess.Popen(
-                        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                        stderr=errlog, text=True, bufsize=1, **pc.detached_popen_kwargs(),
-                    )
+                proc, log_offset = self._spawn(lec, device)
             except Exception:
-                # No writer ever ran: never leave it "recording" (that would
+                # No writer is running: never leave it "recording" (that would
                 # also keep it busy, so it could not be moved, until a restart).
                 lec.set_state("failed", recovery_note=(
                     "The recorder could not be started, so nothing was recorded."))
                 raise
+            return self._track(lec, proc, device, log_offset)
 
-            # Written durably BEFORE we depend on it: an orphaned ffmpeg that is
-            # not attributable cannot be adopted or cleaned up.
+    def _spawn(self, lec: Lecture, device: audio.Device,
+               start_number: int = 0) -> tuple[subprocess.Popen, int]:
+        """Start the writer and record it durably in recording.json. If that
+        write fails the writer is stopped again: an orphan nobody tracks would
+        keep the mic on, and recovery could later trash the folder it writes to."""
+        log_offset = _size(lec.work / "record.stderr.log")
+        argv = self._argv(lec, device, start_number=start_number)
+        with open(lec.work / "record.stderr.log", "ab", buffering=0) as errlog:
+            proc = subprocess.Popen(
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=errlog, text=True, bufsize=1, **pc.detached_popen_kwargs(),
+            )
+        try:
             storage.atomic_write_json(lec.work / "recording.json", {
                 "pid": proc.pid,
                 "boot_sec": storage.boot_seconds(),
@@ -267,20 +274,34 @@ class Recorder:
                 "device_index": device.index,
                 "log_offset": log_offset,
             }, durable=True)
+        except Exception:
+            self._signal_stop(proc, self._stop_file_for(lec.id))
+            raise
+        return proc, log_offset
 
-            self._proc = proc
-            self._state = RecordingState(
-                lecture_id=lec.id, pid=proc.pid, device_name=device.name,
-                device_index=device.index, started_monotonic=time.monotonic(),
-                started_utc=storage.utcnow(), log_offset=log_offset,
-            )
-            self._caffeinate = self._start_caffeinate(proc.pid)
-            self._pump = threading.Thread(target=self._pump_progress,
-                                          args=(proc,), daemon=True)
-            self._pump.start()
-            self._guard = threading.Thread(target=self._watch, daemon=True)
-            self._guard.start()
-            return self.status()
+    def _track(self, lec: Lecture, proc: subprocess.Popen,
+               device: audio.Device, log_offset: int) -> dict:
+        """Make a freshly spawned writer the active recording. Lock held."""
+        self._proc = proc
+        self._state = RecordingState(
+            lecture_id=lec.id, pid=proc.pid, device_name=device.name,
+            device_index=device.index, started_monotonic=time.monotonic(),
+            started_utc=storage.utcnow(), log_offset=log_offset,
+        )
+        self._caffeinate = self._start_caffeinate(proc.pid)
+        self._pump = threading.Thread(target=self._pump_progress,
+                                      args=(proc,), daemon=True)
+        self._pump.start()
+        self._guard = threading.Thread(target=self._watch, daemon=True)
+        self._guard.start()
+        return self.status()
+
+    @staticmethod
+    def _seg_pattern(lec: Lecture) -> str:
+        """printf-style output pattern. Escape % in the folder part: a class
+        named "100% Math" otherwise breaks every writer (Python raises, Swift
+        drops the %, ffmpeg misreads it) and nothing is recorded."""
+        return str(lec.work).replace("%", "%%") + os.sep + "seg-%06d.wav"
 
     def _argv(self, lec: Lecture, device: audio.Device,
               start_number: int = 0) -> list[str]:
@@ -295,7 +316,7 @@ class Recorder:
             return [
                 sys.executable, str(Path(__file__).with_name("capture_py.py")),
                 "--device", device.name,
-                "--out", str(lec.work / "seg-%06d.wav"),
+                "--out", self._seg_pattern(lec),
                 "--segment-seconds", str(config.SEGMENT_SECONDS),
                 "--start-number", str(start_number),
                 "--stop-file", str(stop_file),
@@ -304,7 +325,7 @@ class Recorder:
         if helper is not None:
             return [
                 str(helper), "--device", device.name,
-                "--out", str(lec.work / "seg-%06d.wav"),
+                "--out", self._seg_pattern(lec),
                 "--segment-seconds", str(config.SEGMENT_SECONDS),
                 "--start-number", str(start_number),
                 *(["--pause-on-lid"] if _builtin_mic(device.name) else []),
@@ -323,7 +344,7 @@ class Recorder:
             "-reset_timestamps", "1",
             "-segment_format_options", "flush_packets=1",   # the real flush fix
             "-progress", "pipe:1", "-nostats",
-            str(lec.work / "seg-%06d.wav"),
+            self._seg_pattern(lec),
         ]
 
     def _start_caffeinate(self, pid: int) -> subprocess.Popen | None:
@@ -390,8 +411,10 @@ class Recorder:
                     break
                 if adopted:
                     self._adopted_progress(st)
-                if time.monotonic() - st.last_progress > _STALL_SECONDS:
+                silent_for = time.monotonic() - st.last_progress
+                if silent_for > _STALL_SECONDS:
                     st.stalled = True
+                dead_mic = silent_for > _DEAD_MIC_SECONDS
                 builtin = _builtin_mic(st.device_name)
                 owned = bool(st.stop_reason)
 
@@ -407,6 +430,8 @@ class Recorder:
                 next_lid = time.monotonic() + _LID_POLL_SECONDS
                 if lid_closed():
                     why = REASON_LID
+            if dead_mic and not why:
+                why = REASON_NO_AUDIO
             if why:
                 log.warning("pausing recording: %s", why)
                 try:
@@ -491,6 +516,8 @@ class Recorder:
             end = time.monotonic() + 8.0
             while proc.poll() is None and time.monotonic() < end:
                 time.sleep(0.1)
+            if proc.poll() is not None:
+                Path(stop_file).unlink(missing_ok=True)   # done its job; never left in .work
         if pc.IS_WIN:
             for fn in (getattr(proc, "terminate", None) or proc.kill, proc.kill):
                 if proc.poll() is not None:
@@ -603,7 +630,6 @@ class Recorder:
 
             lec.work.mkdir(parents=True, exist_ok=True)
             next_index = self._seed_from_archive_if_needed(lec)
-            base_ms = sum(concat.wav_duration_ms(p) for p in lec.segments())
 
             t0 = time.monotonic()
             device = self._resume_device(lec, state)
@@ -614,40 +640,14 @@ class Recorder:
                 if not skip_probe:
                     audio.probe(device)
 
-            argv = self._argv(lec, device, start_number=next_index)
-            log_offset = _size(lec.work / "record.stderr.log")
-            with open(lec.work / "record.stderr.log", "ab", buffering=0) as errlog:
-                proc = subprocess.Popen(
-                    argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=errlog, text=True, bufsize=1, **pc.detached_popen_kwargs(),
-                )
-
-            storage.atomic_write_json(lec.work / "recording.json", {
-                "pid": proc.pid,
-                "boot_sec": storage.boot_seconds(),
-                "argv_token": lec.id,
-                "started_utc": storage.utcnow(),
-                "device_name": device.name,
-                "device_index": device.index,
-                "log_offset": log_offset,
-            }, durable=True)
-
-            lec.set_state("recording", pause_reason=None, paused_utc=None)
+            proc, log_offset = self._spawn(lec, device, start_number=next_index)
+            try:
+                lec.set_state("recording", pause_reason=None, paused_utc=None)
+            except Exception:
+                self._signal_stop(proc, self._stop_file_for(lec.id))
+                raise
             log.info("resumed %s in %.2f s", lec.id, time.monotonic() - t0)
-            self._proc = proc
-            self._state = RecordingState(
-                lecture_id=lec.id, pid=proc.pid, device_name=device.name,
-                device_index=device.index, started_monotonic=time.monotonic(),
-                started_utc=storage.utcnow(), base_ms=base_ms,
-                log_offset=log_offset,
-            )
-            self._caffeinate = self._start_caffeinate(proc.pid)
-            self._pump = threading.Thread(target=self._pump_progress,
-                                          args=(proc,), daemon=True)
-            self._pump.start()
-            self._guard = threading.Thread(target=self._watch, daemon=True)
-            self._guard.start()
-            return self.status()
+            return self._track(lec, proc, device, log_offset)
 
     @staticmethod
     def _resume_device(lec: Lecture, state: str | None):
@@ -662,7 +662,7 @@ class Recorder:
         if not name:
             return None
         try:
-            devices = audio.list_audio_devices(use_cache=True)
+            devices = audio.list_audio_devices(use_cache=False)   # a mic unplugged since the pause must not match
         except audio.PreflightError:
             return None
         return next((d for d in devices if d.name == name), None)

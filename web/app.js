@@ -698,6 +698,8 @@ function pausedText(d) {
       return `Paused${at} because the Mac went to sleep. The mic is off and everything up to then is saved.`;
     case "recorder stopped unexpectedly":
       return `Recording stopped unexpectedly${at}. Everything up to then is saved.`;
+    case "microphone stopped":
+      return `Paused${at} because the microphone stopped sending sound (unplugged, or the computer slept). Everything up to then is saved — check the mic and press Continue.`;
     case "disk full":
       return `Paused${at} because this Mac is almost out of disk space. Everything up to then is saved — free some space to continue.`;
     default:

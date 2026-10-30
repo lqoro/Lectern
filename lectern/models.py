@@ -11,6 +11,7 @@ not measurements: the benchmark has no CPU-only run yet.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -54,6 +55,9 @@ class Model:
     # Apple GPU, and CPU-only. Used for "an hour of lecture takes ~N min".
     xrt_gpu: float = 0.0
     xrt_cpu: float = 0.0
+    # SHA-256 of `file` as published (Hugging Face LFS oid). A download that
+    # does not match is never installed.
+    sha256: str = ""
 
 
 # Ordered best-quality first. Measured 2026-10-26 on an M1:
@@ -64,19 +68,24 @@ class Model:
 CATALOG: tuple[Model, ...] = (
     Model("large-v3-q5_0", "ggml-large-v3-q5_0.bin", 1081, 1507, 5,
           "Most accurate", "Slowest. Needs a strong machine with 16 GB or more.",
-          xrt_gpu=6.1, xrt_cpu=1.2),
+          xrt_gpu=6.1, xrt_cpu=1.2,
+          sha256="d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1"),
     Model("large-v3-turbo-q5_0", "ggml-large-v3-turbo-q5_0.bin", 574, 736, 4,
           "Balanced (default)", "Near-large accuracy at about twice the speed.",
-          xrt_gpu=9.0, xrt_cpu=3.1),
+          xrt_gpu=9.0, xrt_cpu=3.1,
+          sha256="394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"),
     Model("small.en", "ggml-small.en-q5_1.bin", 190, 382, 3,
           "Light", "Good for older or low-memory computers. English only.",
-          alts=(("ggml-small.en.bin", 488),), xrt_gpu=23.2, xrt_cpu=10.4),
+          alts=(("ggml-small.en.bin", 488),), xrt_gpu=23.2, xrt_cpu=10.4,
+          sha256="bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30"),
     Model("base.en", "ggml-base.en-q5_1.bin", 60, 208, 2,
           "Very light", "Fast on weak machines; more mistakes. English only.",
-          alts=(("ggml-base.en.bin", 148),), xrt_gpu=57.2, xrt_cpu=29.8),
+          alts=(("ggml-base.en.bin", 148),), xrt_gpu=57.2, xrt_cpu=29.8,
+          sha256="4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f"),
     Model("tiny.en", "ggml-tiny.en-q5_1.bin", 32, 185, 1,
           "Minimal", "For very old machines. Expect many mistakes. English only.",
-          alts=(("ggml-tiny.en.bin", 78),), xrt_gpu=72.9, xrt_cpu=73.7),
+          alts=(("ggml-tiny.en.bin", 78),), xrt_gpu=72.9, xrt_cpu=73.7,
+          sha256="c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b"),
 )
 BY_ID = {m.id: m for m in CATALOG}
 
@@ -382,6 +391,20 @@ def _check_model_file(path: Path, model: Model) -> None:
         raise DownloadError(
             "the downloaded file is not a valid speech model (a Wi-Fi login page "
             "or a network error?). Try again on a working connection.")
+    if model.sha256 and _sha256(path) != model.sha256:
+        # e.g. a resumed .part spliced onto bytes of a different revision.
+        path.unlink(missing_ok=True)
+        raise DownloadError(
+            "the downloaded model is damaged (its checksum does not match). "
+            "Press Download again to fetch a fresh copy.")
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 def hardware_free(path: Path) -> int | None:

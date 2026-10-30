@@ -119,11 +119,39 @@ def recover(lec: Lecture) -> dict:
     return {"recovered": was_still_recording, "salvaged_ms": salvaged_ms, "note": note}
 
 
-def run_startup_recovery(submit, submit_import=None) -> list[str]:
-    """Recover every interrupted lecture and requeue it. Returns lecture ids."""
+def finish_released(lec: Lecture) -> bool:
+    """The last pipeline step installs the archive, moves .work to the trash and
+    then marks "complete". A crash between those leaves "archiving" with no
+    .work, which scan_interrupted never looks at; a failed move (a file held
+    open on Windows) leaves a complete lecture still holding .work. Finish either."""
+    if not lec.archive_path.is_file():
+        return False
+    state = lec.manifest().get("state")
+    if state == "archiving" and not lec.work.is_dir():
+        lec.set_state("complete")
+        return True
+    if state == "complete" and lec.work.is_dir() and not (lec.work / "recording.json").exists():
+        from .archive import release_work
+        release_work(lec)
+        return True
+    return False
+
+
+def run_startup_recovery(submit, submit_import=None,
+                         is_running=lambda _id: False) -> list[str]:
+    """Recover every interrupted lecture and requeue it. Returns lecture ids.
+    is_running: a job a user started meanwhile owns its lecture; leave it."""
     from .recorder import self_pause_reason
+    for lec in Lecture.all():
+        try:
+            if finish_released(lec):
+                log.warning("finished the interrupted last step of %s", lec.id)
+        except Exception:
+            log.exception("could not finish %s", lec.id)
     done = []
     for lec in scan_interrupted():
+        if is_running(lec.id):
+            continue
         try:
             if lec.manifest().get("state") == "importing":
                 # An import has no live writer to lose: the uploaded file is
@@ -209,7 +237,8 @@ _DELETABLE_NAMES = ("master.wav", "master.wav.part", "concat.manifest.json",
                     "import-source", "import-source.part", "import.wav.part",
                     "import.stderr.log",
                     "whisper.raw.json", "whisper.stderr.log", "record.stderr.log",
-                    "recording.json", "stage", ".metadata_never_index")
+                    "recording.json", "stage", ".metadata_never_index",
+                    "STOP")             # the portable writer's stop request
 
 
 def _purge_work_dir(work: Path) -> int:
