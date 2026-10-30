@@ -228,6 +228,11 @@ class LegalAndNotice(Base):
             self.assertIn(needle, r.get_data(as_text=True), doc)
         self.assertEqual(self.client.get("/api/legal/..%2Fsecret").status_code, 404)
 
+    def test_full_licence_texts_fall_back_in_a_source_checkout(self):
+        r = self.client.get("/api/legal/texts")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("licence", r.get_data(as_text=True))
+
     def test_quick_record_waits_for_the_recording_notice(self):
         started = []
         with mock.patch.object(self.server.RECORDER, "status", lambda: {"recording": False}), \

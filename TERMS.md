@@ -43,8 +43,35 @@ developers are not liable for lost or damaged recordings or any other loss.
 
 ## 4. Third-party software
 
-Lectern relies on separately installed software and models with their own
-licences — see `THIRD_PARTY_NOTICES.md`. In particular, the optional notes
-model (`qwen2.5:3b`) is licensed for research and evaluation use only.
+Lectern bundles or relies on software and models with their own licences; see
+`THIRD_PARTY_NOTICES.md` and, in the downloads, the full texts in
+`THIRD_PARTY_LICENSES.txt`. In particular, the optional notes model
+(`qwen2.5:3b`) is licensed for research and evaluation use only.
 
-Last updated 2026-10-26.
+## 5. Beta and unsigned builds
+
+Builds marked beta (including the Windows version) are early and less tested.
+Until the Mac app is notarized by Apple, macOS asks you to confirm before it
+opens. Download Lectern only from the official GitHub releases page
+(https://github.com/lqoro/Lectern/releases) or the Lectern website, and check
+the SHA-256 checksums listed with each release.
+
+## 6. Donations
+
+Donations (through Ko-fi) are voluntary gifts to support development. They do
+not buy a licence, features, support or any other benefit, and Lectern stays
+free whether or not you donate. Payments are handled by Ko-fi under its own
+terms; refunds, if any, follow Ko-fi's policies.
+
+## 7. Trademarks
+
+Apple, Mac and macOS are trademarks of Apple Inc. Windows is a trademark of
+Microsoft Corporation. Lectern is an independent project, not affiliated with
+or endorsed by them, OpenAI, or any school or university.
+
+## 8. Changes
+
+These terms may be updated; the current version is always in this file, with
+the date below.
+
+Last updated 2026-10-30.

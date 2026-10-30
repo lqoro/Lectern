@@ -177,6 +177,22 @@ def build_swift(src: Path, out: Path) -> Path:
     return out
 
 
+def collect_licenses(py: Path) -> Path:
+    """Full licence texts of everything bundled, for Resources/licenses and the
+    app's Settings > Legal. The build venv holds exactly what PyInstaller freezes."""
+    out = BUILD / "THIRD_PARTY_LICENSES.txt"
+    site, stdlib = (subprocess.check_output(
+        [py, "-c", f"import sysconfig; print(sysconfig.get_path('{k}'))"], text=True).strip()
+        for k in ("purelib", "stdlib"))
+    ff = BUILD / "src" / f"ffmpeg-{FFMPEG_TAG}"
+    run([sys.executable, REPO / "packaging" / "collect_licenses.py",
+         "--site-packages", site, "--python-license", Path(stdlib) / "LICENSE.txt",
+         "--out", out,
+         "--extra", f"FFmpeg {FFMPEG_TAG} (LICENSE.md)={ff / 'LICENSE.md'}",
+         "--extra", f"FFmpeg {FFMPEG_TAG} (GNU LGPL 2.1)={ff / 'COPYING.LGPLv2.1'}"])
+    return out
+
+
 def build_backend() -> Path:
     """Freeze the server with PyInstaller into a one-folder build."""
     say("Freezing the Python server with PyInstaller")
@@ -187,7 +203,7 @@ def build_backend() -> Path:
     run([py, "-m", "pip", "install", "--quiet", "--upgrade", "pip"])
     run([py, "-m", "pip", "install", "--quiet", "-r", REPO / "requirements.txt", PYINSTALLER])
     work, dist = BUILD / "pyinstaller", BUILD / "pyinstaller-dist"
-    data = [(REPO / "web", "web")] + [
+    data = [(REPO / "web", "web"), (collect_licenses(py), ".")] + [
         (REPO / name, ".") for name in
         ("LICENSE", "THIRD_PARTY_NOTICES.md", "PRIVACY.md", "TERMS.md")]
     cmd = [py, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir",
@@ -255,6 +271,7 @@ def assemble(menu: Path, capture: Path, backend: Path,
         check_links(tool)
         shutil.copy2(tool, bin_dir / tool.name)
     for f in (REPO / "LICENSE", REPO / "THIRD_PARTY_NOTICES.md",
+              BUILD / "THIRD_PARTY_LICENSES.txt", REPO / "PRIVACY.md", REPO / "TERMS.md",
               whisper.parent / "whisper.cpp-LICENSE",
               *sorted(ffmpeg.parent.parent.glob("ffmpeg-*"))):
         if f.is_file():
