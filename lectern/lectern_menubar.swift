@@ -10,9 +10,21 @@
 //   * start = POST /api/record/toggle (auto-titled, no dialog), same key stops
 //
 // Usage: LecternMenu --repo <path to the Lectern folder> [--port 8477]
+//
+// Inside Lectern.app (packaging/macos/build_app.py) it needs no --repo: it runs
+// the bundled server in Contents/Resources/backend, points it at the bundled
+// tools in Contents/Resources/bin, and shows Lectern in its own window (a
+// WKWebView on the local server) with a Dock icon and the usual Mac menus.
 
 import AppKit
 import Carbon.HIToolbox
+import UniformTypeIdentifiers
+import WebKit
+// Only Lectern.app is built with the Sparkle framework (packaging/macos/build_app.py);
+// the developer helper compiles without it and simply has no updates.
+#if canImport(Sparkle)
+import Sparkle
+#endif
 
 // ----------------------------------------------------------------- arguments
 var repo = ""
@@ -28,6 +40,21 @@ do {
     }
 }
 let base = URL(string: "http://127.0.0.1:\(port)")!
+
+// Lectern.app ships the server and its tools inside the bundle.
+let resources = Bundle.main.resourceURL ?? URL(fileURLWithPath: "/nonexistent")
+let bundledServer = resources.appendingPathComponent("backend/lectern-server/lectern-server")
+let bundledBin = resources.appendingPathComponent("bin")
+// No --repo means this is the app. Decided by how we were started, not by
+// whether the server file is there: a packaging mistake (an Xcode copy phase
+// that drops the folder or its executable bit) must show an error, not quietly
+// turn the app into the menu-bar-only developer helper.
+let isBundled = repo.isEmpty
+let bundledServerMissing = isBundled && !FileManager.default.isExecutableFile(atPath: bundledServer.path)
+// The server this app started, stopped again when the app quits. Left running,
+// the next launch (after an update, or from Applications instead of the disk
+// image) would silently keep talking to the old copy.
+var serverProcess: Process?
 
 // ---------------------------------------------------------------------- http
 func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
@@ -48,11 +75,31 @@ func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
 }
 
 /// Start the Lectern server if nothing answers, then call `then(ok)`.
+/// Stop a leftover Lectern server (an older install still running on our port)
+/// so the app never shows its old interface. Never touches a recording in progress.
+func stopStaleServer() {
+    let find = Process()
+    find.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+    find.arguments = ["-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+    let pipe = Pipe()
+    find.standardOutput = pipe
+    find.standardError = FileHandle.nullDevice
+    guard (try? find.run()) != nil else { return }
+    find.waitUntilExit()
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    for pid in out.split(whereSeparator: \.isNewline).compactMap({ Int32($0) }) { kill(pid, SIGTERM) }
+    Thread.sleep(forTimeInterval: 1.0)
+}
+
 func ensureServer(_ then: @escaping (Bool) -> Void) {
-    request("api/status", timeout: 1.5) { _, code in
-        if code == 200 { return then(true) }
-        guard !repo.isEmpty else { return then(false) }
-        let py = URL(fileURLWithPath: repo).appendingPathComponent(".venv/bin/python")
+    request("api/status", timeout: 1.5) { json, code in
+        if code == 200 {
+            let mine = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            let stale = isBundled && json?["version"] as? String != mine
+            if !stale || json?["recording"] as? Bool == true { return then(true) }
+            stopStaleServer()
+        }
+        guard !bundledServerMissing else { return then(false) }
         let logs = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Lectern/logs")
         try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
@@ -61,15 +108,25 @@ func ensureServer(_ then: @escaping (Bool) -> Void) {
             FileManager.default.createFile(atPath: logURL.path, contents: nil)
         }
         let p = Process()
-        p.executableURL = py
-        p.arguments = ["-m", "lectern"]
-        p.currentDirectoryURL = URL(fileURLWithPath: repo)
+        if isBundled {
+            p.executableURL = bundledServer
+            p.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+            var env = ProcessInfo.processInfo.environment
+            env["LECTERN_BIN_DIR"] = bundledBin.path
+            env["LECTERN_PORT"] = String(port)
+            p.environment = env
+        } else {
+            p.executableURL = URL(fileURLWithPath: repo).appendingPathComponent(".venv/bin/python")
+            p.arguments = ["-m", "lectern"]
+            p.currentDirectoryURL = URL(fileURLWithPath: repo)
+        }
         if let log = try? FileHandle(forWritingTo: logURL) {
             log.seekToEndOfFile()
             p.standardOutput = log
             p.standardError = log
         }
         do { try p.run() } catch { return then(false) }
+        serverProcess = p
         // Wait for it to answer (first start builds the mic helper: be patient).
         var tries = 0
         func check() {
@@ -133,6 +190,238 @@ func register(_ sc: Shortcut) -> Bool {
     return err == noErr
 }
 
+
+// ------------------------------------------------------------------- updates
+/// In-app updates with Sparkle. The feed (SUFeedURL) and the key that signs
+/// every update (SUPublicEDKey) are in Info.plist; Sparkle looks for a newer
+/// version once a day if the user leaves that on, and installs one only after
+/// the user says so. Every update archive is checked against that key, so a
+/// tampered download is refused.
+#if canImport(Sparkle)
+final class UpdateCenter: NSObject, SPUUpdaterDelegate {
+    private(set) lazy var standard = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
+    var updater: SPUUpdater { standard.updater }
+
+    override init() {
+        super.init()
+        _ = standard                 // creating it starts the updater
+    }
+
+    /// What the Settings page shows.
+    func state() -> [String: Any] {
+        var s: [String: Any] = ["available": true, "auto": updater.automaticallyChecksForUpdates]
+        if let last = updater.lastUpdateCheckDate { s["last"] = last.timeIntervalSince1970 * 1000 }
+        return s
+    }
+
+    func setAuto(_ on: Bool) { updater.automaticallyChecksForUpdates = on }
+
+    // Never restart the app under a lecture: wait until the recording has stopped.
+    func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
+                 untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
+        guard controller.recording else { return false }
+        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { t in
+            if !controller.recording { t.invalidate(); installHandler() }
+        }
+        return true
+    }
+}
+#endif
+var updates: AnyObject?
+
+/// The web UI's Settings talks to the app through this handler (named "lectern"):
+/// {cmd: "updates"} -> state, {cmd: "auto", on: Bool}, {cmd: "check"}.
+/// Only pages from our own local server may call it.
+final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage,
+                               replyHandler: @escaping (Any?, String?) -> Void) {
+        let url = message.frameInfo.request.url
+        guard message.frameInfo.isMainFrame, url?.host == "127.0.0.1", url?.port == port,
+              let body = message.body as? [String: Any], let cmd = body["cmd"] as? String
+        else { return replyHandler(nil, "not allowed") }
+        #if canImport(Sparkle)
+        if let center = updates as? UpdateCenter {
+            switch cmd {
+            case "updates": return replyHandler(center.state(), nil)
+            case "auto": center.setAuto(body["on"] as? Bool ?? true); return replyHandler(center.state(), nil)
+            case "check": center.standard.checkForUpdates(nil); return replyHandler(center.state(), nil)
+            default: break
+            }
+        }
+        #endif
+        replyHandler(["available": false], nil)
+    }
+}
+
+// -------------------------------------------------------------- the window
+/// Lectern's own window in the bundled app: the web UI on 127.0.0.1 in a
+/// WKWebView. Links that leave the local server (help, donate, licences) and
+/// file downloads open in the default browser.
+final class MainWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
+    let window: NSWindow
+    let web: WKWebView
+
+    override init() {
+        let cfg = WKWebViewConfiguration()
+        // The web UI shows Mac-app-only parts (donate, updates) when it sees this.
+        cfg.applicationNameForUserAgent = "LecternMac/1"
+        cfg.userContentController.addScriptMessageHandler(NativeBridge(), contentWorld: .page, name: "lectern")
+        web = WKWebView(frame: .zero, configuration: cfg)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 820),
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                          backing: .buffered, defer: false)
+        super.init()
+        web.navigationDelegate = self
+        web.uiDelegate = self
+        window.title = "Lectern"
+        window.minSize = NSSize(width: 380, height: 520)
+        window.contentView = web
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.setFrameAutosaveName("LecternMain")
+        if window.frame.origin == .zero { window.center() }
+        web.load(URLRequest(url: base))
+    }
+
+    func show(hash: String? = nil) {
+        if let hash {
+            web.evaluateJavaScript("location.hash = \(String(reflecting: hash)); if (\(String(reflecting: hash)) === '#settings') document.getElementById('settingsBtn').click();")
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func isLocal(_ url: URL?) -> Bool {
+        guard let url else { return true }
+        return url.scheme == "about" || (url.host == "127.0.0.1" && url.port == port)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if !isLocal(action.request.url), let url = action.request.url {
+            NSWorkspace.shared.open(url)
+            return decisionHandler(.cancel)
+        }
+        decisionHandler(.allow)
+    }
+
+    // A download (Content-Disposition: attachment) goes to the browser, which saves it.
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        let http = response.response as? HTTPURLResponse
+        let disposition = http?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+        if disposition.lowercased().hasPrefix("attachment") || !response.canShowMIMEType,
+           let url = response.response.url {
+            NSWorkspace.shared.open(url)
+            return decisionHandler(.cancel)
+        }
+        decisionHandler(.allow)
+    }
+
+    // target="_blank" links.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = action.request.url { NSWorkspace.shared.open(url) }
+        return nil
+    }
+
+    // <input type="file"> for Import.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.audio, .movie, .audiovisualContent]
+        panel.beginSheetModal(for: window) { r in completionHandler(r == .OK ? panel.urls : nil) }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        let a = NSAlert()
+        a.messageText = message
+        a.beginSheetModal(for: window) { _ in completionHandler() }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        let a = NSAlert()
+        a.messageText = message
+        a.addButton(withTitle: "OK")
+        a.addButton(withTitle: "Cancel")
+        a.beginSheetModal(for: window) { r in completionHandler(r == .alertFirstButtonReturn) }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+        let a = NSAlert()
+        a.messageText = prompt
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        field.stringValue = defaultText ?? ""
+        a.accessoryView = field
+        a.addButton(withTitle: "OK")
+        a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = field
+        a.beginSheetModal(for: window) { r in
+            completionHandler(r == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
+    }
+
+    // If the server restarts under us, reload once it answers again.
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
+                 withError error: Error) {
+        ensureServer { ok in if ok { webView.load(URLRequest(url: base)) } }
+    }
+}
+
+/// File, Edit and Window menus, so copy, paste, ⌘W and ⌘Q work as on any Mac app.
+func installMainMenu(settings: Selector, target: AnyObject) {
+    var checkItem: NSMenuItem?
+    #if canImport(Sparkle)
+    if let center = updates as? UpdateCenter {
+        // Sparkle's own action keeps the item greyed out while a check is running.
+        let item = NSMenuItem(title: "Check for Updates…",
+                              action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+                              keyEquivalent: "")
+        item.target = center.standard
+        checkItem = item
+    }
+    #endif
+    let main = NSMenu()
+    func submenu(_ title: String) -> NSMenu {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let m = NSMenu(title: title)
+        item.submenu = m
+        main.addItem(item)
+        return m
+    }
+    let appMenu = submenu("Lectern")
+    appMenu.addItem(withTitle: "About Lectern",
+                    action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+    if let checkItem { appMenu.addItem(checkItem) }
+    appMenu.addItem(.separator())
+    let s = appMenu.addItem(withTitle: "Settings…", action: settings, keyEquivalent: ",")
+    s.target = target
+    appMenu.addItem(.separator())
+    appMenu.addItem(withTitle: "Hide Lectern", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    appMenu.addItem(withTitle: "Quit Lectern", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    let edit = submenu("Edit")
+    edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+    edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+    edit.addItem(.separator())
+    edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+    let win = submenu("Window")
+    win.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+    win.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+    NSApp.mainMenu = main
+    NSApp.windowsMenu = win
+}
+
 // ------------------------------------------------------------------- the app
 final class Controller: NSObject, NSMenuDelegate {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -153,6 +442,8 @@ final class Controller: NSObject, NSMenuDelegate {
             self?.online = ok
             self?.refreshShortcut()
             self?.poll()
+            // Opening Lectern.app should open Lectern, not just a menu bar icon.
+            if ok && isBundled { openLecternUI() }
         }
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.refreshShortcut()
@@ -237,11 +528,11 @@ final class Controller: NSObject, NSMenuDelegate {
     }
 
     @objc func openApp() {
-        ensureServer { _ in NSWorkspace.shared.open(base) }
+        ensureServer { _ in openLecternUI() }
     }
 
     @objc func openShortcutSettings() {
-        ensureServer { _ in NSWorkspace.shared.open(URL(string: "\(base.absoluteString)/#settings")!) }
+        ensureServer { _ in openLecternUI(hash: "#settings") }
     }
 
     @objc func quit() { NSApp.terminate(nil) }
@@ -285,11 +576,54 @@ final class Controller: NSObject, NSMenuDelegate {
         _ = add("Open Lectern", #selector(openApp))
         _ = add("Change shortcut…", #selector(openShortcutSettings))
         menu.addItem(.separator())
-        _ = add("Quit menu bar helper", #selector(quit))
+        _ = add(isBundled ? "Quit Lectern" : "Quit menu bar helper", #selector(quit))
+    }
+}
+
+/// The bundled app shows its own window; the developer helper (`--repo`) keeps
+/// opening the browser, as before.
+var mainWindow: MainWindow?
+func openLecternUI(hash: String? = nil) {
+    guard isBundled else {
+        NSWorkspace.shared.open(URL(string: base.absoluteString + "/" + (hash ?? ""))!)
+        return
+    }
+    if mainWindow == nil { mainWindow = MainWindow() }
+    mainWindow?.show(hash: hash)
+}
+
+/// Clicking the Dock icon (or opening Lectern.app again) brings the window back.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard bundledServerMissing else { return }
+        let a = NSAlert()
+        a.messageText = "Lectern is damaged"
+        a.informativeText = "Its server is missing from \(bundledServer.path). Download Lectern again."
+        a.runModal()
+        NSApp.terminate(nil)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        guard let p = serverProcess, p.isRunning else { return }
+        p.terminate()          // SIGTERM; a recording writer is a separate process and keeps going
+        let deadline = Date().addingTimeInterval(3)
+        while p.isRunning && Date() < deadline { usleep(50_000) }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if isBundled { ensureServer { _ in openLecternUI() } }
+        return false
     }
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.accessory)           // menu bar only, no Dock icon
+// Lectern.app is a normal app with a Dock icon; the developer helper stays menu-bar only.
+app.setActivationPolicy(isBundled ? .regular : .accessory)
+let delegate = AppDelegate()
+app.delegate = delegate
 let controller = Controller()
+#if canImport(Sparkle)
+if isBundled { updates = UpdateCenter() }
+#endif
+if isBundled { installMainMenu(settings: #selector(Controller.openShortcutSettings), target: controller) }
 app.run()

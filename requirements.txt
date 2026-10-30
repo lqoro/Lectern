@@ -5,3 +5,4 @@ waitress>=3.0
 sounddevice>=0.5
 numpy>=1.26
 psutil>=5.9
+certifi>=2024.2.2

@@ -28,6 +28,16 @@ const fmt = (s) => {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}`
            : `${m}:${String(x).padStart(2, "0")}`;
 };
+// "Tue, Oct 27, 2:20 PM"; the year only when it is not this year.
+const niceDate = (iso) => {
+  const d = new Date(iso);
+  if (Number.isNaN(+d)) return "";
+  const o = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+  if (d.getFullYear() !== new Date().getFullYear()) o.year = "numeric";
+  return d.toLocaleString(undefined, o);
+};
+const PLAY_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7.5-4.5z"/></svg>';
+const PAUSE_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5h2v9H5zM9 3.5h2v9H9z"/></svg>';
 const clock = (s) => { s = Math.floor(s || 0);
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`; };
 
@@ -201,11 +211,17 @@ audio.addEventListener("timeupdate", () => {
   if (d && Number.isFinite(d)) {
     $("durTime").textContent = fmt(d);
     $("seek").value = String(Math.round((audio.currentTime / d) * 1000));
+    moveTapeHead(audio.currentTime / d);
   }
 });
-audio.addEventListener("play", () => { $("playBtn").textContent = "❚❚"; loop(); });
-audio.addEventListener("pause", () => { $("playBtn").textContent = "▶"; cancelAnimationFrame(R.raf); });
-audio.addEventListener("ended", () => { $("playBtn").textContent = "▶"; });
+const playIcon = (playing) => {
+  $("playBtn").innerHTML = playing ? PAUSE_ICON : PLAY_ICON;
+  $("playBtn").setAttribute("aria-label", playing ? "Pause" : "Play");
+};
+playIcon(false);
+audio.addEventListener("play", () => { playIcon(true); loop(); });
+audio.addEventListener("pause", () => { playIcon(false); cancelAnimationFrame(R.raf); });
+audio.addEventListener("ended", () => playIcon(false));
 audio.addEventListener("seeked", () => { if (R.doc) paint(audio.currentTime * 1000); });
 
 function loop() {
@@ -221,7 +237,53 @@ $("playBtn").onclick = () => (audio.paused ? audio.play().catch(() => {}) : audi
 $("seek").oninput = (e) => {
   const d = audio.duration || (R.doc ? R.doc.duration_ms / 1000 : 0);
   if (d && Number.isFinite(d)) audio.currentTime = (e.target.value / 1000) * d;
+  moveTapeHead(e.target.value / 1000);
 };
+
+/* ------------------------------------------------------------- tape */
+// The whole lecture as one strip: how much was said in each slice (from the
+// word timings), where each note came from, and where the audio is now.
+const TAPE = { bins: 160, notes: [] };
+function drawTape() {
+  const svg = $("tapeSvg");
+  const total = R.doc ? R.doc.duration_ms : 0;
+  if (!total || !R.t0) { svg.innerHTML = ""; $("tapeScale").textContent = ""; return; }
+  // About one bar per 4 seconds, 40-160 bars, so short and long lectures both read.
+  const n = TAPE.bins = Math.max(40, Math.min(160, Math.round(total / 4000)));
+  const counts = new Array(n).fill(0);
+  for (const t of R.t0) counts[Math.min(n - 1, Math.floor((t / total) * n))]++;
+  const max = Math.max(1, ...counts);
+  svg.setAttribute("viewBox", `0 0 ${n} 40`);
+  let bars = "";
+  counts.forEach((c, i) => {
+    if (!c) return;
+    const h = 4 + (c / max) * 26;
+    bars += `<rect data-i="${i}" x="${i + 0.15}" y="${30 - h}" width="0.7" height="${h}"/>`;
+  });
+  const ticks = TAPE.notes.map((ms) => {
+    const x = (ms / total) * n;
+    return `<line x1="${x}" x2="${x}" y1="33" y2="40"/>`;
+  }).join("");
+  svg.innerHTML = `<g class="bars">${bars}</g>` +
+    `<line class="base" x1="0" x2="${n}" y1="30.5" y2="30.5"/><g class="ticks">${ticks}</g>`;
+  TAPE.heardTo = -1;
+  const mins = total / 60000, step = mins > 90 ? 30 : mins > 40 ? 10 : mins > 12 ? 5 : mins > 4 ? 1 : 0;
+  const marks = [];
+  if (step) for (let m = 0; m * 60000 < total * 0.97; m += step) marks.push(m * 60);
+  $("tapeScale").innerHTML = marks.map((sec) =>
+    `<span style="left:${(sec * 1000 / total) * 100}%">${fmt(sec)}</span>`).join("") +
+    `<span class="end">${fmt(total / 1000)}</span>`;
+  moveTapeHead(audio.duration ? audio.currentTime / audio.duration : 0);
+}
+function moveTapeHead(frac) {
+  const f = Math.max(0, Math.min(1, frac || 0));
+  $("tapeHead").style.left = `${f * 100}%`;
+  // Bars already heard turn ink; only touch the ones that changed.
+  const upto = Math.floor(f * TAPE.bins);
+  if (upto === TAPE.heardTo) return;
+  for (const r of $("tapeSvg").querySelectorAll(".bars rect")) r.classList.toggle("on", +r.dataset.i < upto);
+  TAPE.heardTo = upto;
+}
 // Playback speed, 0.5x-2x. Remembered across lectures and restarts; set as the
 // default rate too, because loading a new src resets playbackRate to it.
 const RATES = [...$("rate").options].map((o) => parseFloat(o.value));
@@ -315,6 +377,8 @@ function noteButton(b) {
 function renderNotes(doc) {
   const host = $("notes");
   host.textContent = "";
+  TAPE.notes = (doc.sections || []).flatMap((s) => s.bullets.map((b) => b.t_ms)).filter(Number.isFinite);
+  drawTape();
   if (doc.fallback) {
     const w = document.createElement("p");
     w.className = "note-warn";
@@ -376,8 +440,9 @@ function renderNotes(doc) {
   }
   const foot = document.createElement("p");
   foot.className = "note-foot";
-  foot.innerHTML = `Written on this Mac by <code>${esc(doc.engine || "?")}</code>. ` +
-    `Dimmed timestamps are approximate. ` +
+  const writer = doc.engine && doc.engine !== "none"
+    ? `Written on this computer by ${esc(doc.engine)}.` : "Taken straight from the transcript.";
+  foot.innerHTML = `${writer} Dimmed timestamps are approximate. ` +
     `<button id="regenNotes" class="ghost tiny">Rewrite</button>`;
   host.appendChild(foot);
   $("regenNotes").onclick = async (e) => {
@@ -421,7 +486,7 @@ async function refreshLecture(first) {
   $("lecTitle").textContent = d.title;
   $("appTitle").textContent = d.folder || d.course || "Lectern";
   const bits = [];
-  if (d.created_utc) bits.push(new Date(d.created_utc).toLocaleString());
+  if (d.created_utc) bits.push(niceDate(d.created_utc));
   if (d.duration_ms) bits.push(fmt(d.duration_ms / 1000));
   if (d.words) bits.push(`${d.words.toLocaleString()} words`);
   if (d.bytes) bits.push(`${(d.bytes / 1e6).toFixed(1)} MB`);
@@ -448,6 +513,8 @@ async function refreshLecture(first) {
       ? pausedText(d)
       : "Missed something? You can record more into this same lecture.";
     $("resumeBtn").textContent = d.state === "paused" ? "Continue recording" : "Record more";
+    // Finished lectures get a quiet one-line offer, not a banner.
+    rb.classList.toggle("quiet", d.state !== "paused");
     // A paused lecture can be finished without recording more.
     $("finishBtn").classList.toggle("hidden", d.state !== "paused");
   } else {
@@ -498,7 +565,7 @@ async function refreshLecture(first) {
   if (d.has_transcript && (!R.doc || first)) {
     try {
       const doc = await api(`/api/lecture/${encodeURIComponent(R.id)}/transcript`);
-      buildIndex(doc); renderTranscript(doc);
+      buildIndex(doc); renderTranscript(doc); drawTape();
       $("durTime").textContent = fmt(doc.duration_ms / 1000);
     } catch { /* still processing */ }
   } else if (!d.has_transcript && !job) {
@@ -541,7 +608,8 @@ async function loadFolders() {
       localStorage.setItem("lectern.folder", r.key);
       for (const c of ul.children) c.classList.remove("sel");
       li.classList.add("sel");
-      renderLibrary();
+      setSidebar(false);
+      if ($("library").classList.contains("hidden")) showLibrary(); else renderLibrary();
     };
     if (r.key !== ALL && r.key !== "") {
       li.ondblclick = () => renameFolder(r.key);
@@ -803,26 +871,32 @@ function renderLibrary() {
     $("libEmpty").querySelector("p").innerHTML =
       "Hit <b>Record a lecture</b> when class starts. Everything stays on this Mac.";
   }
+  const secs = list.reduce((a, l) => a + (l.duration_ms || 0) / 1000, 0);
+  $("libTitle").textContent = L.sel === ALL ? "All lectures" : (L.sel || "Unfiled");
+  $("libSub").textContent = list.length
+    ? `${list.length} lecture${list.length === 1 ? "" : "s"}${secs >= 60 ? `, ${hoursText(secs)} recorded` : ""}.`
+    : "";
   for (const l of list) {
     const li = document.createElement("li");
     li.className = "card";
+    li.tabIndex = 0;
     const busy = ["importing", "concatenating", "transcribing", "noting", "archiving"].includes(l.state);
     li.innerHTML = `
-      <div style="min-width:0">
+      <div class="c-main">
         <div class="t1">${esc(l.title)}${
-          busy ? '<span class="badge work">processing</span>' : ""}${
-          l.state === "paused" ? `<span class="badge warn"${l.pause_reason ? ` title="${esc(l.pause_reason)}"` : ""}>paused${
-            l.pause_reason === "lid closed" ? " \u00b7 lid closed" : ""}</span>` : ""}${
-          l.recovered ? '<span class="badge warn">recovered</span>' : ""}${
-          l.state === "recording" ? '<span class="badge work">recording</span>' : ""}</div>
-        <div class="t2">${esc(l.course ? l.course + " \u00b7 " : "")}${
-          l.created_utc ? new Date(l.created_utc).toLocaleString() : ""}
+          busy ? '<span class="badge work">Processing</span>' : ""}${
+          l.state === "paused" ? `<span class="badge warn"${l.pause_reason ? ` title="${esc(l.pause_reason)}"` : ""}>Paused${
+            l.pause_reason === "lid closed" ? ", lid closed" : ""}</span>` : ""}${
+          l.recovered ? '<span class="badge warn">Recovered</span>' : ""}${
+          l.state === "recording" ? '<span class="badge rec">Recording</span>' : ""}</div>
+        <div class="t2">${l.created_utc ? esc(niceDate(l.created_utc)) : ""}
           <button class="chip${l.pending_folder != null ? " pending" : ""}" data-move title="Move to another class">${
-            esc(effFolder(l) || "Unfiled")}${l.pending_folder != null ? " (moving\u2026)" : ""} \u25be</button></div>
+            esc(effFolder(l) || "Unfiled")}${l.pending_folder != null ? " (moving\u2026)" : ""}</button></div>
       </div>
-      <div class="right">${l.duration_ms ? fmt(l.duration_ms / 1000) + "<br>" : ""}${
-        l.words ? l.words.toLocaleString() + " words" : ""}</div>
-      <button class="more" data-more title="More">\u22ef</button>`;
+      <div class="c-len">${l.duration_ms ? fmt(l.duration_ms / 1000) : '<span class="muted">\u2014</span>'}</div>
+      <div class="c-words">${l.words ? `${l.words.toLocaleString()} words` : ""}</div>
+      <button class="more" data-more title="More" aria-label="More actions">\u22ef</button>`;
+    li.onkeydown = (e) => { if (e.key === "Enter" && e.target === li) openLecture(l.id); };
     li.onclick = (e) => {
       if (e.target.closest("[data-move],[data-more],.card-menu,.move-menu")) return;
       openLecture(l.id);
@@ -871,10 +945,18 @@ function openCardMenu(li, l) {
   };
   setTimeout(() => document.addEventListener("click", close), 0);
 }
+const hoursText = (s) => { const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h ? `${h} h ${m} min` : `${m} min`; };
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 $("backBtn").onclick = showLibrary;
+function setSidebar(open) {
+  document.body.classList.toggle("side-open", open);
+  $("menuBtn").setAttribute("aria-expanded", String(open));
+}
+$("menuBtn").onclick = () => setSidebar(!document.body.classList.contains("side-open"));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") setSidebar(false); });
 
 /* ---------------------------------------------------------- recording */
 let folderTouched = false;
@@ -1255,7 +1337,7 @@ const OPEN_SETTINGS = location.hash === "#settings";   // the menu bar's "Change
 requireNotice();                         // first launch: show the notice right away
 (function start() {
   const m = location.hash.match(/^#\/l\/(.+)$/);
-  if (m) openLecture(decodeURIComponent(m[1])); else showLibrary();
+  if (m) { openLecture(decodeURIComponent(m[1])); loadLibrary(); } else showLibrary();
   poll();
 })();
 
@@ -1324,7 +1406,36 @@ async function loadSettings() {
   if (busy && $("settingsDlg").open) dlTimer = setTimeout(loadSettings, 800);
 }
 
-$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadStorage(); };
+// Donate: shown only inside the Mac app (its window identifies itself in the
+// user agent).
+const DONATE_URL = "https://ko-fi.com/lqoro";
+if (/LecternMac\//.test(navigator.userAgent)) {
+  $("donateLink").href = DONATE_URL;
+  $("donateSec").classList.remove("hidden");
+  $("scHelper").classList.add("hidden");  // the Mac app has the shortcut built in
+}
+
+// Updates: the Mac app (Sparkle) answers through a native bridge; anywhere else
+// the section stays hidden.
+const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lectern;
+async function native(msg) {
+  try { return await bridge.postMessage(msg); } catch { return null; }
+}
+function showUpdates(s) {
+  if (!s || !s.available) return;
+  $("updatesSec").classList.remove("hidden");
+  $("updAuto").checked = !!s.auto;
+  $("updLast").textContent = s.last
+    ? `Last checked ${new Date(s.last).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`
+    : "Not checked yet";
+}
+async function loadUpdates() {
+  if (bridge) showUpdates(await native({ cmd: "updates" }));
+}
+$("updAuto").onchange = async (e) => showUpdates(await native({ cmd: "auto", on: e.target.checked }));
+$("updNow").onclick = async () => { await native({ cmd: "check" }); setTimeout(loadUpdates, 4000); };
+
+$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadStorage(); loadUpdates(); };
 
 /* ------------------------------------------------------------ storage */
 

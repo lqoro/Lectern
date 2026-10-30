@@ -20,7 +20,7 @@ HERE = Path(__file__).resolve().parent
 # dependencies, plus PyInstaller (its bootloader is inside the Mac app).
 SHIPPED = ("flask", "werkzeug", "jinja2", "itsdangerous", "click", "markupsafe",
            "blinker", "waitress", "sounddevice", "cffi", "pycparser", "numpy",
-           "psutil", "pyinstaller")
+           "psutil", "certifi", "pyinstaller")
 
 ALWAYS = (("PortAudio (inside sounddevice)", HERE / "licenses" / "portaudio-LICENSE.txt"),
           ("whisper.cpp and ggml", HERE / "licenses" / "whisper.cpp-LICENSE"))

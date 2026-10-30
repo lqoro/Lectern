@@ -138,6 +138,12 @@ class ModelChecksum(Base):
         models._check_model_file(p, models.Model("t", "m.bin", 1, 1, 1, "t", "t", sha256=good))
 
 
+class DownloadCertificates(Base):
+    def test_downloads_trust_the_bundled_certificate_authorities(self):
+        models = importlib.import_module("lectern.models")
+        self.assertGreater(models._ssl_context().cert_store_stats()["x509_ca"], 50)
+
+
 class OneServer(Base):
     def test_a_second_copy_does_not_start(self):
         main = importlib.import_module("lectern.__main__")
