@@ -9,11 +9,13 @@ backup-*.tar.gz
 # Developer-only: benchmark (uses real lecture recordings) and handoff notes
 bench/
 HANDOFF.md
+HANDOFF-redesign.md
 
 # Machine-local
 .DS_Store
 .claude/
 x-post-draft.md
+redesign/
 
 # Lectern.app builds (packaging/macos/build_app.py)
 /build/
