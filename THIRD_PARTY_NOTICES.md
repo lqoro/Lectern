@@ -33,17 +33,26 @@ texts are in the `licenses` folder and `THIRD_PARTY_LICENSES.txt` next to
 | [Python](https://www.python.org) embeddable package | 3.12.10 | PSF License |
 | Python packages (table below) | | as listed |
 | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) Windows binaries | b5454 | MIT |
-| [FFmpeg](https://ffmpeg.org) LGPL shared build by [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) | n8.1.3 | LGPL-2.1-or-later |
+| [FFmpeg](https://ffmpeg.org) LGPL shared build by [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) | n8.1.3-24-g92611900bb | LGPL-2.1-or-later |
 | Microsoft Visual C++ runtime (`msvcp140.dll`, `vcomp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`) | 14.51 | © Microsoft Corporation; redistributable files under Microsoft's Visual C++ Redistributable terms |
 
 ### FFmpeg source code
 
-FFmpeg is LGPL software. Its complete source for the version Lectern ships
-(tag `n8.1.3`) is available from <https://github.com/FFmpeg/FFmpeg/tree/n8.1.3>,
-and a copy is attached to every Lectern release that bundles FFmpeg. The Mac
-build's exact configuration is in `packaging/macos/build_app.py`; the Windows
-build is BtbN's published `lgpl-shared` build. Lectern runs FFmpeg as separate
-programs, so you can replace them with your own build.
+FFmpeg is LGPL software, and its complete source is available for exactly the
+versions Lectern ships:
+
+- **Mac app:** tag `n8.1.3`, <https://github.com/FFmpeg/FFmpeg/tree/n8.1.3>,
+  configured as in `packaging/macos/build_app.py`.
+- **Windows beta:** BtbN's `lgpl-shared` build of commit `92611900bb`
+  (n8.1.3-24-g92611900bb),
+  <https://github.com/FFmpeg/FFmpeg/tree/92611900bb112123e9bf997fdcc2d78e4c4922fc>.
+  The scripts that built it, which pin the libraries it includes, are
+  <https://github.com/BtbN/FFmpeg-Builds/tree/b4a2b1d7cc241786eb8e2b588a7ade40cad48bbd>
+  (release `autobuild-2026-10-27-18-38`).
+
+A copy of the FFmpeg source is attached to every Lectern release that bundles
+it. Lectern runs FFmpeg as separate programs, so you can replace them with your
+own build.
 
 Speech models and the notes model are never bundled. They are downloaded only
 when you ask.
