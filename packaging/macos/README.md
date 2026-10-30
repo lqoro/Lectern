@@ -25,7 +25,7 @@ pages, whisper-cli and the AAC encoder.
    answers on port 8477, so you would be testing the old one), and remove the
    old menu bar helper so the two don't fight over ⌘L:
    `.venv/bin/python -m lectern.menubar uninstall`
-2. Open `dist/Lectern-0.2.0.dmg` and drag Lectern to Applications.
+2. Open `dist/Lectern-<version>.dmg` and drag Lectern to Applications.
 3. Open Lectern. It should open in your browser, show the mic icon in the menu
    bar, and ask for the microphone the first time you record.
 4. Download a speech model in Settings, record a short lecture, check the
@@ -57,13 +57,29 @@ refuse to open it until the next two steps are done.
 4. Sign the disk image, notarize it, and staple the ticket:
 
    ```bash
-   codesign --sign "Developer ID Application: YOUR NAME (YOUR_TEAM_ID)" --timestamp dist/Lectern-0.2.0.dmg
-   xcrun notarytool submit dist/Lectern-0.2.0.dmg --keychain-profile lectern-notary --wait
-   xcrun stapler staple dist/Lectern-0.2.0.dmg
-   spctl --assess --type open --context context:primary-signature -v dist/Lectern-0.2.0.dmg
+   VERSION=$(.venv/bin/python -c 'from lectern import config; print(config.VERSION)')
+   codesign --sign "Developer ID Application: YOUR NAME (YOUR_TEAM_ID)" --timestamp dist/Lectern-$VERSION.dmg
+   xcrun notarytool submit dist/Lectern-$VERSION.dmg --keychain-profile lectern-notary --wait
+   xcrun stapler staple dist/Lectern-$VERSION.dmg
+   spctl --assess --type open --context context:primary-signature -v dist/Lectern-$VERSION.dmg
    ```
 
 5. Test on a fresh user account, then attach the DMG to a GitHub Release.
+6. Publish the update for people who already have Lectern. The DMG must be on
+   the GitHub Release **before** the feed goes live:
+
+   ```bash
+   .venv/bin/python packaging/macos/make_appcast.py dist/Lectern-$VERSION.dmg \
+     --notes packaging/macos/notes/$VERSION.html --out ~/lectern-site/appcast.xml
+   cd ~/lectern-site && git add appcast.xml && git commit -m "feat: update feed $VERSION" \
+     && npx vercel deploy --prod --yes
+   ```
+
+   The script signs the image with the update key in this Mac's login keychain
+   and refuses to continue if the app inside reports a different version.
+   Lose that key and installed copies can never be updated again, so keep a
+   backup (`generate_keys -x file` from the Sparkle download in `build/macos/src`)
+   somewhere private, never in this repository.
 
 `entitlements.plist` grants only `com.apple.security.device.audio-input`, the
 microphone under the hardened runtime. If the frozen Python server will not
@@ -78,4 +94,5 @@ add only what the log or a crash asks for.
 - Study notes still need Ollama installed separately. The default notes
   model (`qwen2.5:3b`) is research-licensed; swapping it needs a quality
   check on real lectures first.
-- No update check yet.
+- Updates need the Sparkle framework in `build/macos/src/sparkle-*` (fetched and
+  checked against a pinned hash by `build_app.py`). Windows has no update check.

@@ -1412,8 +1412,30 @@ const DONATE_URL = "https://ko-fi.com/lqoro";
 if (/LecternMac\//.test(navigator.userAgent)) {
   $("donateLink").href = DONATE_URL;
   $("donateSec").classList.remove("hidden");
+  $("scHelper").classList.add("hidden");  // the Mac app has the shortcut built in
 }
-$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadStorage(); };
+
+// Updates: the Mac app (Sparkle) answers through a native bridge; anywhere else
+// the section stays hidden.
+const bridge = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lectern;
+async function native(msg) {
+  try { return await bridge.postMessage(msg); } catch { return null; }
+}
+function showUpdates(s) {
+  if (!s || !s.available) return;
+  $("updatesSec").classList.remove("hidden");
+  $("updAuto").checked = !!s.auto;
+  $("updLast").textContent = s.last
+    ? `Last checked ${new Date(s.last).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`
+    : "Not checked yet";
+}
+async function loadUpdates() {
+  if (bridge) showUpdates(await native({ cmd: "updates" }));
+}
+$("updAuto").onchange = async (e) => showUpdates(await native({ cmd: "auto", on: e.target.checked }));
+$("updNow").onclick = async () => { await native({ cmd: "check" }); setTimeout(loadUpdates, 4000); };
+
+$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadStorage(); loadUpdates(); };
 
 /* ------------------------------------------------------------ storage */
 

@@ -34,6 +34,7 @@ builds are cached in build/macos/ and reused while the pinned versions match.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import plistlib
 import shutil
@@ -64,6 +65,16 @@ COMMITS = {"v1.9.1": "f049fff95a089aa9969deb009cdd4892b3e74916",
 PYINSTALLER = "pyinstaller>=6.10,<7"
 MIN_MACOS = "12.0"
 ARCH = "arm64"
+
+# In-app updates: Sparkle, pinned by the SHA-256 of its release archive. The
+# private key that signs every update lives only in the release Mac's login
+# keychain (Sparkle's generate_keys); this is the matching public half.
+SPARKLE_VERSION = "2.10.0"
+SPARKLE_SHA256 = "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c"
+SPARKLE_URL = ("https://github.com/sparkle-project/Sparkle/releases/download/"
+               f"{SPARKLE_VERSION}/Sparkle-{SPARKLE_VERSION}.tar.xz")
+UPDATE_PUBLIC_KEY = "wV80T7yROOZRpzA7CPMU5OVX6Q8GqqchcIaYBk2ZK1w="
+FEED_URL = os.environ.get("LECTERN_FEED_URL", "https://lectern-ten.vercel.app/appcast.xml")
 
 BUNDLE_ID = "app.lectern"
 EXE_NAME = "LecternMenu"
@@ -193,11 +204,36 @@ def build_ffmpeg() -> tuple[Path, Path]:
     return ff, fp
 
 
-def build_swift(src: Path, out: Path) -> Path:
+def fetch_sparkle() -> Path:
+    """Sparkle's release archive, checked against the pinned hash, unpacked once.
+    Returns the folder holding Sparkle.framework and its bin/ tools."""
+    dest = BUILD / "src" / f"sparkle-{SPARKLE_VERSION}"
+    if (dest / "Sparkle.framework").is_dir():
+        return dest
+    say(f"Fetching Sparkle {SPARKLE_VERSION}")
+    if dest.exists():
+        set_aside(dest)
+    dest.mkdir(parents=True)
+    archive = dest.parent / f"Sparkle-{SPARKLE_VERSION}.tar.xz"
+    with urllib.request.urlopen(SPARKLE_URL, timeout=120) as r:
+        archive.write_bytes(r.read())
+    got = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if got != SPARKLE_SHA256:
+        archive.unlink()
+        raise SystemExit(f"Sparkle download has hash {got}, expected {SPARKLE_SHA256}.")
+    run(["tar", "-xf", archive, "-C", dest])
+    return dest
+
+
+def build_swift(src: Path, out: Path, sparkle: Path | None = None) -> Path:
     say(f"Compiling {src.name}")
     out.parent.mkdir(parents=True, exist_ok=True)
+    link = []
+    if sparkle:
+        link = ["-F", sparkle, "-framework", "Sparkle",
+                "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]
     run(["/usr/bin/xcrun", "swiftc", "-O", "-swift-version", "5",
-         "-target", f"{ARCH}-apple-macos{MIN_MACOS}", "-o", out, src])
+         "-target", f"{ARCH}-apple-macos{MIN_MACOS}", *link, "-o", out, src])
     return out
 
 
@@ -213,7 +249,9 @@ def collect_licenses(py: Path) -> Path:
          "--site-packages", site, "--python-license", Path(stdlib) / "LICENSE.txt",
          "--out", out,
          "--extra", f"FFmpeg {FFMPEG_TAG} (LICENSE.md)={ff / 'LICENSE.md'}",
-         "--extra", f"FFmpeg {FFMPEG_TAG} (GNU LGPL 2.1)={ff / 'COPYING.LGPLv2.1'}"])
+         "--extra", f"FFmpeg {FFMPEG_TAG} (GNU LGPL 2.1)={ff / 'COPYING.LGPLv2.1'}",
+         "--extra", f"Sparkle {SPARKLE_VERSION} and its bundled components (LICENSE)="
+                    f"{fetch_sparkle() / 'LICENSE'}"])
     return out
 
 
@@ -276,11 +314,20 @@ def info_plist() -> dict:
         "NSHumanReadableCopyright": "MIT License. See Resources/licenses.",
         "NSMicrophoneUsageDescription": MIC_REASON,
         "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
+        # Sparkle. Checking is on by default and can be turned off in Settings;
+        # an update is only ever installed after the user presses Install, and
+        # no system profile is sent.
+        "SUFeedURL": FEED_URL,
+        "SUPublicEDKey": UPDATE_PUBLIC_KEY,
+        "SUEnableAutomaticChecks": True,
+        "SUAllowsAutomaticUpdates": False,
+        "SUScheduledCheckInterval": 86400,
+        "SUEnableSystemProfiling": False,
     }
 
 
 def assemble(menu: Path, capture: Path, backend: Path,
-             whisper: Path, ffmpeg: Path, ffprobe: Path) -> None:
+             whisper: Path, ffmpeg: Path, ffprobe: Path, sparkle: Path) -> None:
     say(f"Assembling {APP.relative_to(REPO)}")
     if APP.exists():
         set_aside(APP)
@@ -290,6 +337,10 @@ def assemble(menu: Path, capture: Path, backend: Path,
     for d in (contents / "MacOS", bin_dir, lic):
         d.mkdir(parents=True)
     shutil.copy2(menu, contents / "MacOS" / EXE_NAME)
+    # Lectern is not sandboxed, so Sparkle's XPC helper services (only for
+    # sandboxed apps) are left out: fewer programs to sign and to trust.
+    shutil.copytree(sparkle / "Sparkle.framework", contents / "Frameworks" / "Sparkle.framework",
+                    symlinks=True, ignore=shutil.ignore_patterns("XPCServices"))
     shutil.copytree(backend, res / "backend" / "lectern-server", symlinks=True)
     for tool in (whisper, ffmpeg, ffprobe, capture):
         check_links(tool)
@@ -300,6 +351,7 @@ def assemble(menu: Path, capture: Path, backend: Path,
               *sorted(ffmpeg.parent.parent.glob("ffmpeg-*"))):
         if f.is_file():
             shutil.copy2(f, lic / f.name)
+    shutil.copy2(sparkle / "LICENSE", lic / "Sparkle-LICENSE")
     make_icon(res / "AppIcon.icns")
     with open(contents / "Info.plist", "wb") as f:
         plistlib.dump(info_plist(), f)
@@ -329,9 +381,26 @@ def sign(identity: str) -> None:
         if hardened and os.access(p, os.X_OK) and p.suffix not in (".so", ".dylib"):
             extra = ["--entitlements", HERE / "entitlements.plist"]
         run(base + extra + [p], stdout=subprocess.DEVNULL)
+    # Sparkle, inside out: its updater programs, then the framework itself.
+    fw = APP / "Contents" / "Frameworks" / "Sparkle.framework"
+    for p in (fw / "Versions" / "B" / "Autoupdate", fw / "Versions" / "B" / "Updater.app", fw):
+        run(base + [p], stdout=subprocess.DEVNULL)
     ent = ["--entitlements", HERE / "entitlements.plist"] if hardened else []
     run(base + ent + [APP])
     run(["/usr/bin/codesign", "--verify", "--deep", "--strict", APP])
+
+
+def check_updater() -> None:
+    """The update machinery is in the bundle and points where it should."""
+    info = plistlib.loads((APP / "Contents" / "Info.plist").read_bytes())
+    assert info["SUFeedURL"].startswith(("https://", "http://127.0.0.1")), "update feed must be https"
+    assert info["SUPublicEDKey"] == UPDATE_PUBLIC_KEY, "update key missing from Info.plist"
+    fw = APP / "Contents" / "Frameworks" / "Sparkle.framework"
+    assert (fw / "Versions" / "B" / "Autoupdate").is_file(), "Sparkle is not in the app"
+    assert not (fw / "XPCServices").exists(), "Sparkle XPC services should be left out"
+    linked = subprocess.run(["otool", "-L", APP / "Contents" / "MacOS" / EXE_NAME],
+                            capture_output=True, text=True, check=True).stdout
+    assert "@rpath/Sparkle.framework" in linked, "the app is not linked against Sparkle"
 
 
 def smoke_test() -> None:
@@ -339,6 +408,7 @@ def smoke_test() -> None:
     questions the app depends on. Never touches ~/Lectures."""
     say("Smoke test: bundled server, web UI, legal docs, tools")
     res = APP / "Contents" / "Resources"
+    check_updater()
     port = 18477
     with tempfile.TemporaryDirectory() as tmp:
         env = {**os.environ, "LECTERN_BIN_DIR": str(res / "bin"),
@@ -406,12 +476,13 @@ def main() -> None:
     need("cmake", "Install it with: brew install cmake")
     BUILD.mkdir(parents=True, exist_ok=True)
 
+    sparkle = fetch_sparkle()
     whisper = build_whisper()
     ffmpeg, ffprobe = build_ffmpeg()
     capture = build_swift(config.CAPTURE_SRC, BUILD / "swift" / config.CAPTURE_BIN.name)
-    menu = build_swift(REPO / "lectern" / "lectern_menubar.swift", BUILD / "swift" / EXE_NAME)
+    menu = build_swift(REPO / "lectern" / "lectern_menubar.swift", BUILD / "swift" / EXE_NAME, sparkle)
     backend = build_backend()
-    assemble(menu, capture, backend, whisper, ffmpeg, ffprobe)
+    assemble(menu, capture, backend, whisper, ffmpeg, ffprobe, sparkle)
     sign(a.identity)
     if not a.skip_smoke:
         smoke_test()

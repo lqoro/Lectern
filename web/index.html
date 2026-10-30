@@ -237,7 +237,18 @@
           <button type="button" id="scBtn" class="kbd" aria-describedby="scHint">⌘L</button>
         </div>
         <p class="hint" id="scHint"></p>
-        <p class="hint">Needs the menu bar helper (<code>./install.sh --menubar</code>).</p>
+        <p class="hint" id="scHelper">Needs the menu bar helper (<code>./install.sh --menubar</code>).</p>
+      </div>
+    </section>
+    <section class="set-sec hidden" id="updatesSec">
+      <div class="set-label"><h4>Updates</h4><p>Lectern can tell you when a newer version is out. You choose whether to install it.</p></div>
+      <div>
+        <label class="check"><input type="checkbox" id="updAuto"> Check for updates once a day</label>
+        <div class="shortcut-row" style="margin-top:.6rem">
+          <button type="button" id="updNow">Check now</button>
+          <span class="hint" id="updLast" style="margin:0"></span>
+        </div>
+        <p class="hint">A check downloads one small file from lectern-ten.vercel.app. Like any web request it shows your IP address, your system language and the versions of Lectern and its update tool; it sends no recordings, transcripts or other personal details. An update downloads from GitHub only after you press Install, and its signature is checked before it is used.</p>
       </div>
     </section>
     <section class="set-sec hidden" id="donateSec">
