@@ -7,6 +7,10 @@ detached from the backend, so every lecture recorded since mid-September lost
 about two thirds of its speech. The helper writes every buffer and cuts
 segments by sample count instead. ffmpeg stays as the fallback only if the
 helper cannot be built.
+
+Lectern.app ships the helper prebuilt in LECTERN_BIN_DIR (see
+packaging/macos/build_app.py), because people who download the app have no
+Swift compiler. That copy is used as is and never rebuilt.
 """
 from __future__ import annotations
 
@@ -36,6 +40,15 @@ def portable() -> bool:
     return (not pc.IS_MAC) or os.environ.get("LECTERN_CAPTURE_SOURCE") == "synthetic"
 
 
+def bundled() -> Path | None:
+    """The prebuilt helper shipped next to the other tools, if any."""
+    for d in filter(None, os.environ.get("LECTERN_BIN_DIR", "").split(os.pathsep)):
+        p = Path(d) / config.CAPTURE_BIN.name
+        if p.is_file() and os.access(p, os.X_OK):
+            return p
+    return None
+
+
 def _stale() -> bool:
     try:
         return config.CAPTURE_BIN.stat().st_mtime < config.CAPTURE_SRC.stat().st_mtime
@@ -49,6 +62,9 @@ def ensure_built(timeout: float = 600) -> Path | None:
     global _failed_mtime
     if portable():
         return None
+    shipped = bundled()
+    if shipped:
+        return shipped
     with _lock:
         if not _stale():
             return config.CAPTURE_BIN
@@ -82,4 +98,7 @@ def available() -> Path | None:
     """Non-blocking: the helper if it is already built and current."""
     if portable():
         return None
+    shipped = bundled()
+    if shipped:
+        return shipped
     return None if _stale() else config.CAPTURE_BIN
