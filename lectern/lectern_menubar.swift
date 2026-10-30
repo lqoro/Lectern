@@ -70,9 +70,30 @@ func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
 }
 
 /// Start the Lectern server if nothing answers, then call `then(ok)`.
+/// Stop a leftover Lectern server (an older install still running on our port)
+/// so the app never shows its old interface. Never touches a recording in progress.
+func stopStaleServer() {
+    let find = Process()
+    find.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+    find.arguments = ["-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+    let pipe = Pipe()
+    find.standardOutput = pipe
+    find.standardError = FileHandle.nullDevice
+    guard (try? find.run()) != nil else { return }
+    find.waitUntilExit()
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    for pid in out.split(whereSeparator: \.isNewline).compactMap({ Int32($0) }) { kill(pid, SIGTERM) }
+    Thread.sleep(forTimeInterval: 1.0)
+}
+
 func ensureServer(_ then: @escaping (Bool) -> Void) {
-    request("api/status", timeout: 1.5) { _, code in
-        if code == 200 { return then(true) }
+    request("api/status", timeout: 1.5) { json, code in
+        if code == 200 {
+            let mine = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+            let stale = isBundled && json?["version"] as? String != mine
+            if !stale || json?["recording"] as? Bool == true { return then(true) }
+            stopStaleServer()
+        }
         guard !bundledServerMissing else { return then(false) }
         let logs = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Lectern/logs")

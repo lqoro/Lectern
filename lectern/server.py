@@ -151,6 +151,7 @@ def api_status():
     # A first-run user has no speech model yet; the UI says so up front
     # instead of letting them record a whole lecture that cannot transcribe.
     st["needs_model"] = models.active_path() is None
+    st["version"] = config.VERSION
     return jsonify(st)
 
 
