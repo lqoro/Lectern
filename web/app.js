@@ -1404,8 +1404,8 @@ async function loadSettings() {
 }
 
 // Donate: shown only inside the Mac app (its window identifies itself in the
-// user agent). Replace with the Ko-fi page link: https://ko-fi.com/<name>.
-const DONATE_URL = "https://ko-fi.com";
+// user agent).
+const DONATE_URL = "https://ko-fi.com/lqoro";
 if (/LecternMac\//.test(navigator.userAgent)) {
   $("donateLink").href = DONATE_URL;
   $("donateSec").classList.remove("hidden");
