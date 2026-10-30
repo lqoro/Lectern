@@ -408,5 +408,5 @@ textarea.diag{width:100%;margin-top:10px;font:12px/1.4 ui-monospace,SFMono-Regul
 }
 @media (prefers-reduced-motion:reduce){*{transition:none !important;animation:none !important}}
 .button-link{display:inline-flex;align-items:center;height:32px;padding:0 14px;border-radius:var(--radius-ctl);
-  background:var(--primary);color:var(--on-primary);font-weight:500;text-decoration:none}
-.button-link:hover{opacity:.88}
+  border:1px solid var(--control);background:var(--panel);color:var(--ink);font-weight:500;text-decoration:none}
+.button-link:hover{background:var(--raised)}

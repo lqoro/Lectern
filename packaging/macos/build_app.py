@@ -7,9 +7,9 @@ Everything a student would otherwise install with Homebrew goes inside the app,
 so they download one file and run nothing in Terminal:
 
     Lectern.app/Contents/
-      MacOS/LecternMenu              the menu bar app (lectern_menubar.swift):
-                                     starts the server, opens Lectern, owns the
-                                     microphone permission
+      MacOS/LecternMenu              the app (lectern_menubar.swift): starts the
+                                     server, shows Lectern in its own window and
+                                     the menu bar mic, owns the microphone permission
       Resources/backend/lectern-server/   the Python server, frozen by PyInstaller
       Resources/bin/                 whisper-cli, ffmpeg, ffprobe, lectern-capture
       Resources/licenses/            Lectern's licence and the bundled tools' licences
@@ -231,7 +231,8 @@ def info_plist() -> dict:
         "CFBundleShortVersionString": config.VERSION,
         "CFBundleVersion": config.VERSION,
         "LSMinimumSystemVersion": MIN_MACOS,
-        "LSUIElement": True,                     # lives in the menu bar
+        "LSUIElement": False,                    # a Dock app with its own window
+        "NSHighResolutionCapable": True,
         "NSHumanReadableCopyright": "MIT License. See Resources/licenses.",
         "NSMicrophoneUsageDescription": MIC_REASON,
         "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
