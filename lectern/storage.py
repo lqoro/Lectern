@@ -13,7 +13,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import threading
 import time
@@ -61,9 +60,23 @@ def atomic_write_bytes(path: Path, data: bytes, *, durable: bool = False,
     else:
         os.close(fd)
     os.chmod(tmp, 0o644)      # mkstemp defaults to 0600; these are user documents
-    os.replace(tmp, path)
+    replace(tmp, path)
     if durable:
         pc.fsync_dir(d)                          # persist the directory entry
+
+
+def replace(src, dst) -> None:
+    """os.replace, retried briefly on Windows: there a file (or a folder holding
+    one) that another thread, the player, antivirus or the indexer has open
+    cannot be replaced or renamed for a moment (WinError 5/32)."""
+    for attempt in range(20 if pc.IS_WIN else 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == (19 if pc.IS_WIN else 0):
+                raise
+            time.sleep(0.05)
 
 
 def atomic_write_text(path: Path, text: str, *, durable: bool = False,
@@ -88,6 +101,10 @@ def boot_seconds() -> int:
     exactly the power-loss case we must detect.
     """
     return pc.boot_seconds()
+
+
+# Every id is created_at + slugify() (+ "-n"): letters, digits, "_" and "-".
+_LECTURE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 
 def slugify(title: str, maxlen: int = 48) -> str:
@@ -235,7 +252,9 @@ class Lecture:
     @classmethod
     def load(cls, lecture_id: str) -> "Lecture":
         # Refuse anything that could escape the root.
-        if "/" in lecture_id or lecture_id in (".", "..") or lecture_id.startswith("."):
+        # Real ids are slugify() output plus "-n": letters, digits, "_" and "-".
+        # Anything else (a backslash or drive letter on Windows) could escape.
+        if not _LECTURE_ID.fullmatch(lecture_id):
             raise ValueError(f"invalid lecture id: {lecture_id!r}")
         # The id is the directory basename and stays constant when a lecture is
         # filed into a class folder, so look at the root and one level down.
@@ -259,7 +278,7 @@ class Lecture:
         while dest.exists():
             dest = config.TRASH_DIR / f"{self.path.name}-{n}"
             n += 1
-        self.path.rename(dest)
+        replace(self.path, dest)
         # rename keeps the old mtime, and the 7-day sweep ages entries by
         # mtime: without this a 3-week-old lecture is purged on next start.
         now = time.time()
@@ -282,17 +301,23 @@ class Lecture:
 
     # -- manifest
     def manifest(self) -> dict:
+        """For display: a missing or unreadable manifest reads as empty."""
         try:
-            return json.loads(self.manifest_path.read_text())
+            return self._manifest_strict()
         except (OSError, json.JSONDecodeError):
             return {}
+
+    def _manifest_strict(self) -> dict:
+        """For read-modify-write: a read error must raise, or the write that
+        follows would replace the title, class and audio fields with nothing."""
+        return json.loads(self.manifest_path.read_text())
 
     def write_manifest(self, m: dict, *, durable: bool = True) -> None:
         atomic_write_json(self.manifest_path, m, durable=durable, indent=2, mkdirs=False)
 
     def update(self, **fields) -> dict:
         with _MANIFEST_LOCK:
-            m = self.manifest()
+            m = self._manifest_strict()
             m.update(fields)
             self.write_manifest(m)
             return m
@@ -300,7 +325,7 @@ class Lecture:
     def set_state(self, state: str, **extra) -> dict:
         assert state in STATES, state
         with _MANIFEST_LOCK:
-            m = self.manifest()
+            m = self._manifest_strict()
             m["state"] = state
             m.setdefault("stage_history", []).append({"s": state, "at": utcnow()})
             m.update(extra)
@@ -361,7 +386,11 @@ class Lecture:
 
 
 # --------------------------------------------------------------- folders
-_FOLDER_BAD = re.compile(r'[/\\:\x00-\x1f\ud800-\udfff]')   # lone surrogates cannot be encoded
+# Path separators, characters Windows forbids in names, control characters and
+# lone surrogates (which cannot be encoded).
+_FOLDER_BAD = re.compile(r'[/\\:<>"|?*\x00-\x1f\ud800-\udfff]')
+# Windows device names: "CON" or "com1.txt" cannot be a folder there.
+_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?", re.I)
 FOLDER_MAX = 60
 
 
@@ -374,7 +403,8 @@ def clean_folder(name: str) -> str:
     name = _FOLDER_BAD.sub("", (name or "").strip()).strip(". ")
     if name in ("", ".", ".."):
         return ""
-    return name[:FOLDER_MAX].strip()
+    name = name[:FOLDER_MAX].strip(". ")
+    return name + "_" if _RESERVED.fullmatch(name) else name
 
 
 def _folder_dirs() -> list[Path]:
@@ -404,6 +434,11 @@ def create_folder(name: str) -> str:
     name = clean_folder(name)
     if not name:
         raise ValueError("folder name is empty after cleaning")
+    # "bio" when "Bio" exists is the same folder on a case-insensitive disk
+    # (macOS, Windows): use the name that is really there.
+    same = next((p.name for p in _folder_dirs() if p.name.lower() == name.lower()), None)
+    if same:
+        return same
     (config.LECTURES_ROOT / name).mkdir(parents=True, exist_ok=True)
     return name
 
@@ -416,26 +451,10 @@ def rename_folder(old: str, new: str) -> str:
     dst = config.LECTURES_ROOT / new_c
     if not src.is_dir():
         raise FileNotFoundError(old_c)
-    if dst.exists() and dst != src:
+    if dst.exists() and not os.path.samefile(src, dst):   # "bio" -> "Bio" is fine
         raise FileExistsError(new_c)
-    src.rename(dst)
+    replace(src, dst)
     return new_c
-
-
-def delete_folder(name: str) -> int:
-    """Remove an EMPTY folder. Lectures are never deleted by this."""
-    name = clean_folder(name)
-    d = config.LECTURES_ROOT / name
-    if not d.is_dir():
-        raise FileNotFoundError(name)
-    remaining = [p for p in d.glob("*/lecture.json")]
-    if remaining:
-        raise OSError(f"{name} still holds {len(remaining)} lecture(s)")
-    try:
-        d.rmdir()
-    except OSError as e:
-        raise OSError(f"could not remove {name}: {e}") from e
-    return 0
 
 
 def free_bytes() -> int:

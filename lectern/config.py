@@ -72,8 +72,9 @@ WHISPER_LANG = "en"
 # Note: Qwen Research License, fine for personal coursework.
 LLM_MODEL = os.environ.get("LECTERN_LLM", "qwen2.5:3b")
 LLM_NUM_CTX = int(os.environ.get("LECTERN_NUM_CTX", "8192"))
-# Unload immediately: 2.3 GB must not sit resident on an 8 GB machine.
-LLM_KEEP_ALIVE = 0
+# Kept loaded only between the chunks of one lecture; notes.generate() unloads
+# it explicitly at the end, so 2.3 GB never stays resident on an 8 GB machine.
+LLM_KEEP_ALIVE = "2m"
 
 
 # --- server ------------------------------------------------------------

@@ -136,6 +136,10 @@ final class SegmentWriter {
                 if w < 0 {
                     if errno == EINTR { continue }
                     log("write failed: \(String(cString: strerror(errno)))")
+                    // Drop the partial block so the file stays frame-aligned
+                    // (an odd byte would turn the rest of the segment into noise).
+                    _ = ftruncate(fd, off_t(44 + segFrames * 2))
+                    _ = lseek(fd, 0, SEEK_END)
                     return
                 }
                 done += w

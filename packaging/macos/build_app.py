@@ -57,6 +57,10 @@ APP = DIST / "Lectern.app"
 # flags in config.py / transcribe.py were measured against (see README).
 WHISPER_TAG = os.environ.get("LECTERN_WHISPER_TAG", "v1.9.1")
 FFMPEG_TAG = os.environ.get("LECTERN_FFMPEG_TAG", "n8.1.3")
+# The commit each tag must resolve to: a tag moved upstream stops the build
+# instead of shipping different source under the same name.
+COMMITS = {"v1.9.1": "f049fff95a089aa9969deb009cdd4892b3e74916",
+           "n8.1.3": "1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7"}
 PYINSTALLER = "pyinstaller>=6.10,<7"
 MIN_MACOS = "12.0"
 ARCH = "arm64"
@@ -101,8 +105,28 @@ def clone(url: str, tag: str, dest: Path) -> Path:
     if dest.exists():
         set_aside(dest)
     run(["git", "clone", "--depth", "1", "--branch", tag, url, dest])
+    head = subprocess.check_output(["git", "-C", str(dest), "rev-parse", "HEAD"],
+                                   text=True).strip()
+    want = COMMITS.get(tag)
+    if want is None:
+        say(f"warning: {tag} has no pinned commit ({head}); add it to COMMITS")
+    elif head != want:
+        raise SystemExit(f"{url} tag {tag} is now {head}, expected {want}. "
+                         "Check the upstream change before building.")
     stamp.write_text(tag + "\n")
     return dest
+
+
+def cached(out: Path, recipe: list) -> bool:
+    """Reuse a built tool only if it was built with exactly this recipe (the
+    tag, the commit and every flag); a changed flag rebuilds."""
+    key = out.parent / ".lectern-recipe"
+    want = "\n".join(str(x) for x in recipe)
+    if out.is_file() and key.is_file() and key.read_text() == want:
+        return True
+    key.parent.mkdir(parents=True, exist_ok=True)
+    key.write_text(want)          # written now; a failed build leaves no `out`
+    return False
 
 
 def deployment_env() -> dict:
@@ -122,19 +146,19 @@ def check_links(binary: Path) -> None:
 # ------------------------------------------------------------------- tools
 def build_whisper() -> Path:
     out = BUILD / f"whisper-{WHISPER_TAG}" / "whisper-cli"
-    if out.is_file():
+    flags = ["-DCMAKE_BUILD_TYPE=Release",
+             f"-DCMAKE_OSX_ARCHITECTURES={ARCH}",
+             f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MIN_MACOS}",
+             "-DBUILD_SHARED_LIBS=OFF", "-DGGML_NATIVE=OFF",
+             "-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON",
+             "-DWHISPER_BUILD_TESTS=OFF", "-DWHISPER_BUILD_SERVER=OFF"]
+    if cached(out, [WHISPER_TAG, COMMITS.get(WHISPER_TAG), *flags]):
         return out
     say(f"Building whisper.cpp {WHISPER_TAG} (Metal, static, portable CPU flags)")
     src = clone("https://github.com/ggml-org/whisper.cpp.git", WHISPER_TAG,
                 BUILD / "src" / f"whisper.cpp-{WHISPER_TAG}")
     bdir = src / "build-lectern"
-    run(["cmake", "-S", src, "-B", bdir, "-DCMAKE_BUILD_TYPE=Release",
-         f"-DCMAKE_OSX_ARCHITECTURES={ARCH}",
-         f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MIN_MACOS}",
-         "-DBUILD_SHARED_LIBS=OFF", "-DGGML_NATIVE=OFF",
-         "-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON",
-         "-DWHISPER_BUILD_TESTS=OFF", "-DWHISPER_BUILD_SERVER=OFF"],
-        env=deployment_env())
+    run(["cmake", "-S", src, "-B", bdir, *flags], env=deployment_env())
     run(["cmake", "--build", bdir, "--config", "Release", "-j", os.cpu_count() or 4,
          "--target", "whisper-cli"], env=deployment_env())
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -146,22 +170,22 @@ def build_whisper() -> Path:
 def build_ffmpeg() -> tuple[Path, Path]:
     stage = BUILD / f"ffmpeg-{FFMPEG_TAG}"
     ff, fp = stage / "bin" / "ffmpeg", stage / "bin" / "ffprobe"
-    if ff.is_file() and fp.is_file():
-        return ff, fp
-    say(f"Building FFmpeg {FFMPEG_TAG} (LGPL, system libraries only)")
-    src = clone("https://github.com/FFmpeg/FFmpeg.git", FFMPEG_TAG,
-                BUILD / "src" / f"ffmpeg-{FFMPEG_TAG}")
-    flags = f"-mmacosx-version-min={MIN_MACOS} -arch {ARCH}"
+    cflags = f"-mmacosx-version-min={MIN_MACOS} -arch {ARCH}"
     # No --enable-gpl / --enable-nonfree: the build stays LGPL-2.1-or-later.
     # --disable-autodetect stops configure picking up Homebrew libraries.
     # audiotoolbox = the aac_at encoder (config.ARCHIVE_CODEC); avfoundation =
     # the recorder's last-resort fallback when the Swift helper is missing.
-    run(["./configure", f"--prefix={stage}", "--disable-autodetect",
-         "--enable-audiotoolbox", "--enable-avfoundation", "--enable-zlib",
-         "--disable-doc", "--disable-ffplay", "--disable-network",
-         "--enable-static", "--disable-shared",
-         f"--extra-cflags={flags}", f"--extra-ldflags={flags}"],
-        cwd=src, env=deployment_env())
+    flags = [f"--prefix={stage}", "--disable-autodetect",
+             "--enable-audiotoolbox", "--enable-avfoundation", "--enable-zlib",
+             "--disable-doc", "--disable-ffplay", "--disable-network",
+             "--enable-static", "--disable-shared",
+             f"--extra-cflags={cflags}", f"--extra-ldflags={cflags}"]
+    if cached(ff, [FFMPEG_TAG, COMMITS.get(FFMPEG_TAG), *flags]) and fp.is_file():
+        return ff, fp
+    say(f"Building FFmpeg {FFMPEG_TAG} (LGPL, system libraries only)")
+    src = clone("https://github.com/FFmpeg/FFmpeg.git", FFMPEG_TAG,
+                BUILD / "src" / f"ffmpeg-{FFMPEG_TAG}")
+    run(["./configure", *flags], cwd=src, env=deployment_env())
     run(["make", "-j", os.cpu_count() or 4], cwd=src, env=deployment_env())
     run(["make", "install"], cwd=src, env=deployment_env())
     for name in ("COPYING.LGPLv2.1", "LICENSE.md"):

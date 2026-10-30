@@ -14,7 +14,6 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from . import archive, concat, config, importer, models, notes, storage, transcribe
 from .storage import Lecture
@@ -123,6 +122,8 @@ class Pipeline:
     def _run_notes(self, job: Job) -> None:
         try:
             lec = Lecture.load(job.lecture_id)
+            if not lec.transcript_path.is_file():
+                raise RuntimeError("there is no transcript yet")
             prior = lec.manifest().get("state") or "complete"
             self._set(job, "waiting", 0, "waiting for a free processing slot")
             with STAGE_LOCK:
@@ -256,7 +257,6 @@ class Pipeline:
         storage.atomic_write_json(lec.transcript_path, doc)
         storage.atomic_write_text(lec.transcript_txt_path,
                                   transcribe.to_plain_text(doc))
-        m = lec.manifest()
         lec.update(transcript={
             "file": "transcript.json",
             "words": len(doc["words"]["w"]),

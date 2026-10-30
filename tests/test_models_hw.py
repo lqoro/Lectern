@@ -1,6 +1,6 @@
 """Model selection, download, hardware heuristics, FIFO stage lock, notes guards.
 No network, microphone, ollama or whisper needed.   Run: python -m unittest discover -s tests"""
-import http.server, importlib, os, shutil, sys, tempfile, threading, time, unittest
+import dataclasses, hashlib, http.server, importlib, os, shutil, sys, tempfile, threading, time, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -124,12 +124,15 @@ class Download(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp, True)
         size = 32_000_000                      # tiny.en q5_1 catalogue size
-        url = self.serve(b"lmgg" + b"x" * (size - 4))
+        payload = b"lmgg" + b"x" * (size - 4)
+        url = self.serve(payload)
         m = fresh_modules(tmp, LECTERN_MODEL_BASE_URL=url,
                           LECTERN_MODEL_DIR=str(Path(tmp) / "models"))
         m.LEGACY_DIR = Path(tmp) / "legacy"
         m.BENCH_DIR = Path(tmp) / "bench"
-        tiny = m.BY_ID["tiny.en"]
+        # The fake file is not the real model: give the catalogue its checksum.
+        tiny = m.BY_ID["tiny.en"] = dataclasses.replace(
+            m.BY_ID["tiny.en"], sha256=hashlib.sha256(payload).hexdigest())
         # a previous interrupted attempt left the first 30 MB behind
         m.MODELS_DIR.mkdir(parents=True)
         (m.MODELS_DIR / (tiny.file + ".part")).write_bytes(b"lmgg" + b"x" * 29_999_996)

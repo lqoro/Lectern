@@ -17,7 +17,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
-from . import audio, config, hardware, importer, models, storage, usage
+from . import audio, config, importer, models, storage, usage
 from .pipeline import PIPELINE
 from .recorder import RECORDER, RecorderBusy
 from .storage import Lecture
@@ -64,8 +64,15 @@ def same_origin_only():
 
 @app.before_request
 def require_token():
-    """No-op on loopback. On a LAN bind, every request must carry the token."""
+    """No-op on loopback. On a LAN bind, every request must carry the token --
+    except one from this computer addressed to 127.0.0.1/localhost: the menu
+    bar helper, the ⌘L shortcut and the Mac app's window cannot know the key.
+    (A DNS-rebinding page also connects from 127.0.0.1, but with its own
+    hostname in Host, so it still needs the key.)"""
     if config.is_loopback_only():
+        return None
+    if (request.remote_addr in ("127.0.0.1", "::1")
+            and (request.host or "").lower() in _LOOPBACK_HOSTS):
         return None
     tok = config.access_token()
     given = (request.args.get("k") or request.headers.get("X-Lectern-Token")
@@ -145,17 +152,6 @@ def api_status():
     # instead of letting them record a whole lecture that cannot transcribe.
     st["needs_model"] = models.active_path() is None
     return jsonify(st)
-
-
-@app.get("/api/devices")
-def api_devices():
-    try:
-        devs = [{"index": d.index, "name": d.name} for d in audio.list_audio_devices()]
-        chosen = audio.resolve_device()
-        return jsonify({"devices": devs,
-                        "selected": {"index": chosen.index, "name": chosen.name}})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 @app.post("/api/preflight")
@@ -396,8 +392,7 @@ def api_system():
 
 @app.post("/api/models/select")
 def api_model_select():
-    body = request.get_json(silent=True)
-    mid = body.get("id") if isinstance(body, dict) else None
+    mid = _json_body().get("id")
     if mid is not None and not isinstance(mid, str):
         return jsonify({"error": "unknown model"}), 404
     if mid is None:                       # clear the choice: back to automatic
@@ -414,8 +409,7 @@ def api_model_select():
 @app.post("/api/models/download")
 def api_model_download():
     """Download is always an explicit user action; Lectern never fetches on its own."""
-    body = request.get_json(silent=True)
-    mid = body.get("id") if isinstance(body, dict) else ""
+    mid = _json_body().get("id", "")
     try:
         return jsonify(models.DOWNLOADER.start(mid if isinstance(mid, str) else ""))
     except KeyError:
@@ -487,8 +481,11 @@ def api_notes(lecture_id: str):
 def api_notes_regen(lecture_id: str):
     lec = _load(lecture_id)
     with _MOVE_LOCK:
-        if PIPELINE.is_running(lecture_id):
-            return jsonify({"error": "already processing"}), 409
+        if _busy(lecture_id):
+            return _busy_error(lecture_id)
+        if not lec.transcript_path.is_file():
+            return jsonify({"error": "there is no transcript yet — "
+                                     "transcribe the lecture first"}), 409
         return jsonify(PIPELINE.submit_notes(lecture_id))
 
 
@@ -498,9 +495,8 @@ def api_process(lecture_id: str):
     without recording more ("Finish & transcribe")."""
     _load(lecture_id)
     with _MOVE_LOCK:
-        if RECORDER.current_lecture_id() == lecture_id:
-            return jsonify({"error": "this lecture is still recording — "
-                                     "stop it first"}), 409
+        if _busy(lecture_id):
+            return _busy_error(lecture_id)
         return jsonify(PIPELINE.submit(lecture_id))
 
 
@@ -517,15 +513,23 @@ def api_delete(lecture_id: str):
         if PIPELINE.is_running(lecture_id) or lec.manifest().get("state") == "importing":
             return jsonify({"error": "this lecture is still processing — "
                                      "wait for it to finish first"}), 409
-        dest = lec.trash()
+        try:
+            dest = lec.trash()
+        except OSError:
+            # Windows cannot move a folder while a file in it is open (the
+            # player streaming its audio, antivirus scanning it).
+            return jsonify({"error": "this lecture is in use — close it and "
+                                     "try again"}), 409
     return jsonify({"deleted": True, "trash_path": dest.name})
 
 
 # ------------------------------------------------------------- downloads
+def _audio_mime(path: Path) -> str:
+    return "audio/wav" if path.suffix == ".wav" else "audio/mp4"
+
+
 _DOWNLOAD_KINDS = {
-    "audio": lambda lec: ((lec.playable_path() or lec.archive_path),
-                          "audio/wav" if (lec.playable_path() and lec.playable_path().suffix == ".wav")
-                          else "audio/mp4"),
+    "audio": lambda lec: (p := lec.playable_path() or lec.archive_path, _audio_mime(p)),
     "transcript": lambda lec: (lec.transcript_txt_path, "text/plain"),
     "notes": lambda lec: (lec.notes_path, "text/markdown"),
 }
@@ -580,12 +584,7 @@ def api_audio(lecture_id: str):
     path = lec.playable_path()
     if path is None:
         abort(404)
-    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    if path.suffix == ".m4a":
-        mime = "audio/mp4"
-    elif path.suffix == ".wav":
-        mime = "audio/wav"
-    resp = send_file(path, mimetype=mime, conditional=True,
+    resp = send_file(path, mimetype=_audio_mime(path), conditional=True,
                      max_age=0, last_modified=path.stat().st_mtime)
     resp.headers["Accept-Ranges"] = "bytes"
     return resp
@@ -631,17 +630,6 @@ def api_folder_rename(name: str):
         return jsonify({"error": "a folder with that name already exists"}), 409
     except (ValueError, OSError) as e:
         return jsonify({"error": str(e)}), 400
-
-
-@app.delete("/api/folders/<path:name>")
-def api_folder_delete(name: str):
-    try:
-        storage.delete_folder(name)
-        return jsonify({"deleted": True})
-    except FileNotFoundError:
-        return jsonify({"error": "no such folder"}), 404
-    except OSError as e:
-        return jsonify({"error": str(e)}), 409
 
 
 @app.post("/api/lecture/<lecture_id>/folder")
@@ -695,6 +683,16 @@ def _busy(lecture_id: str) -> bool:
         return False
 
 
+def _busy_error(lecture_id: str):
+    if RECORDER.current_lecture_id() == lecture_id:
+        msg = "this lecture is still recording — stop it first"
+    elif not _STARTUP_DONE.is_set():
+        msg = "Lectern is still starting up — try again in a moment"
+    else:
+        msg = "this lecture is still importing or processing — wait for it to finish"
+    return jsonify({"error": msg}), 409
+
+
 def _apply_pending_moves() -> int:
     moved = 0
     for lec in Lecture.all():
@@ -746,7 +744,8 @@ def _startup_maintenance() -> None:
     except Exception:
         app.logger.exception("capture helper build failed")
     try:
-        ids = recovery.run_startup_recovery(PIPELINE.submit, PIPELINE.submit_import)
+        ids = recovery.run_startup_recovery(PIPELINE.submit, PIPELINE.submit_import,
+                                           PIPELINE.is_running)
         if ids:
             app.logger.warning("recovered interrupted lectures: %s", ids)
     except Exception:

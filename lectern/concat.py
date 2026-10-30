@@ -10,13 +10,15 @@ Duration therefore comes from decoded PCM frame counts and never from a header.
 """
 from __future__ import annotations
 
-import json
 import wave
 from pathlib import Path
 
 from . import config, storage
 
 _BLOCK = 1 << 20
+
+
+_WAV_HEADER_BYTES = 44   # every writer here (Swift, Python, ffmpeg bitexact, wave) emits this
 
 
 def concat_segments(segments: list[Path], dest: Path) -> dict:
@@ -68,6 +70,7 @@ def concat_segments(segments: list[Path], dest: Path) -> dict:
 
 
 def wav_duration_ms(path: Path) -> int:
-    """True duration from frame count, never from the RIFF header."""
-    with wave.open(str(path)) as w:
-        return int(w.getnframes() * 1000 / w.getframerate())
+    """Duration from the bytes actually on disk, never from the RIFF header:
+    a writer killed mid-segment leaves 0xFFFFFFFF there (about 37 hours)."""
+    data = max(0, path.stat().st_size - _WAV_HEADER_BYTES)
+    return data * 1000 // config.BYTES_PER_SEC

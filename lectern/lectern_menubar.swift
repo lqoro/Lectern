@@ -40,7 +40,16 @@ let base = URL(string: "http://127.0.0.1:\(port)")!
 let resources = Bundle.main.resourceURL ?? URL(fileURLWithPath: "/nonexistent")
 let bundledServer = resources.appendingPathComponent("backend/lectern-server/lectern-server")
 let bundledBin = resources.appendingPathComponent("bin")
-let isBundled = FileManager.default.isExecutableFile(atPath: bundledServer.path)
+// No --repo means this is the app. Decided by how we were started, not by
+// whether the server file is there: a packaging mistake (an Xcode copy phase
+// that drops the folder or its executable bit) must show an error, not quietly
+// turn the app into the menu-bar-only developer helper.
+let isBundled = repo.isEmpty
+let bundledServerMissing = isBundled && !FileManager.default.isExecutableFile(atPath: bundledServer.path)
+// The server this app started, stopped again when the app quits. Left running,
+// the next launch (after an update, or from Applications instead of the disk
+// image) would silently keep talking to the old copy.
+var serverProcess: Process?
 
 // ---------------------------------------------------------------------- http
 func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
@@ -64,7 +73,7 @@ func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
 func ensureServer(_ then: @escaping (Bool) -> Void) {
     request("api/status", timeout: 1.5) { _, code in
         if code == 200 { return then(true) }
-        guard isBundled || !repo.isEmpty else { return then(false) }
+        guard !bundledServerMissing else { return then(false) }
         let logs = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Lectern/logs")
         try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
@@ -91,6 +100,7 @@ func ensureServer(_ then: @escaping (Bool) -> Void) {
             p.standardError = log
         }
         do { try p.run() } catch { return then(false) }
+        serverProcess = p
         // Wait for it to answer (first start builds the mic helper: be patient).
         var tries = 0
         func check() {
@@ -482,6 +492,22 @@ func openLecternUI(hash: String? = nil) {
 
 /// Clicking the Dock icon (or opening Lectern.app again) brings the window back.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard bundledServerMissing else { return }
+        let a = NSAlert()
+        a.messageText = "Lectern is damaged"
+        a.informativeText = "Its server is missing from \(bundledServer.path). Download Lectern again."
+        a.runModal()
+        NSApp.terminate(nil)
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        guard let p = serverProcess, p.isRunning else { return }
+        p.terminate()          // SIGTERM; a recording writer is a separate process and keeps going
+        let deadline = Date().addingTimeInterval(3)
+        while p.isRunning && Date() < deadline { usleep(50_000) }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if isBundled { ensureServer { _ in openLecternUI() } }
         return false

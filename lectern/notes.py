@@ -38,6 +38,7 @@ import urllib.error
 import urllib.request
 
 from . import anchor, config, hardware
+from .transcribe import sentence_text
 
 log = logging.getLogger(__name__)
 
@@ -67,10 +68,6 @@ MIN_TOTAL_RAM_BYTES = int(5.5 * 1024**3)   # the model cannot share a smaller ma
 MIN_FREE_RAM_BYTES = int(2.5 * 1024**3)    # Linux/Windows only: see generate()
 NOTES_BUDGET_S = int(os.environ.get("LECTERN_NOTES_BUDGET_S", "1800"))
 BUDGET_CHECK_AFTER = 2                  # chunks measured before projecting
-
-
-class NotesUnavailable(RuntimeError):
-    pass
 
 
 # ------------------------------------------------------------------ ollama
@@ -118,9 +115,6 @@ def _chat(system: str, user: str, schema: dict, *, timeout: float = 900,
 
 
 # ----------------------------------------------------------------- chunking
-def sentence_text(t: dict, s: dict) -> str:
-    w = t["words"]["w"]
-    return " ".join(w[s["w0"]: s["w0"] + s["wn"]])
 
 
 def chunk(t: dict) -> list[dict]:
@@ -280,6 +274,18 @@ def generate(t: dict, *, progress_cb=None) -> dict:
     except Exception as e:
         log.exception("LLM note generation failed; falling back")
         return extractive(t, reason=f"model error: {e}")
+    finally:
+        _unload()
+
+
+def _unload() -> None:
+    """Free the model's RAM now, before whisper or the next lecture may run.
+    The calls keep it loaded briefly (LLM_KEEP_ALIVE) so one lecture's
+    chunks do not reload 2.3 GB from disk each time."""
+    try:
+        _post("/api/generate", {"model": config.LLM_MODEL, "keep_alive": 0}, timeout=30)
+    except Exception:
+        log.debug("could not ask ollama to unload %s", config.LLM_MODEL, exc_info=True)
 
 
 def _content_count(t: dict, sents: list[dict] | None = None) -> int:

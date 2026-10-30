@@ -15,12 +15,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import subprocess
 from pathlib import Path
 
 from . import concat, config, storage
 from . import platform_compat as pc
 from .storage import Lecture
+
+log = logging.getLogger(__name__)
 
 
 class GateError(RuntimeError):
@@ -167,7 +170,7 @@ def release_work(lec: Lecture) -> Path | None:
     while dest.exists():
         dest = config.TRASH_DIR / f"{lec.id}__work-{n}"
         n += 1
-    lec.work.rename(dest)                        # same filesystem: atomic, instant
+    storage.replace(lec.work, dest)              # same filesystem: atomic, instant
     return dest
 
 
@@ -194,7 +197,15 @@ def archive_lecture(lec: Lecture, *, progress_cb=None) -> dict:
     })
     lec.update(audio=audio)
 
-    trashed = release_work(lec)
+    try:
+        trashed = release_work(lec)
+    except OSError:
+        # The archive is installed and verified, so the lecture IS done. On
+        # Windows .work cannot move while the player holds master.wav open;
+        # the next startup moves it (recovery.finish_released).
+        log.warning("could not release .work of %s yet", lec.id, exc_info=True)
+        lec.update(audio=audio)
+        return info
     audio["wav_released_utc"] = storage.utcnow()
     audio["work_trashed_to"] = trashed.name if trashed else None
     lec.update(audio=audio)
