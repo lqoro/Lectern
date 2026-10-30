@@ -10,6 +10,8 @@
   move or delete.
 - **Network use is limited to what you ask for:**
   - downloading a speech model when you press **Download** (from Hugging Face);
+  - **update checks in the Mac app**, once a day unless you turn them off in
+    Settings ▸ Updates (details below);
   - links you click (GitHub, donation page), which open in your browser.
 - **The app window is local too.** The Mac app shows Lectern in its own window,
   served by a small server on your computer that only accepts connections from
@@ -26,6 +28,19 @@
   network you trust.
 - **Recording other people** may be regulated where you are, and your school
   may have its own rules. See the recording notice in `TERMS.md`.
+
+## Update checks (Mac app)
+
+Once a day, and when you press **Check now**, the Mac app downloads one small
+file, `appcast.xml`, from the Lectern website (lectern-ten.vercel.app) to see
+whether a newer version exists. The request carries what any web request
+carries: your IP address, plus the Lectern and Sparkle (the update tool)
+version numbers. It contains no recordings, transcripts, lecture names, device
+identifiers or system profile. If a newer version exists, the app tells you and
+installs it only after you press Install; the update downloads from GitHub and
+its signature is checked against a key built into the app before it is used.
+Turn the daily check off in Settings ▸ Updates; **Check now** still works. The
+Windows beta has no update check.
 
 ## The website
 

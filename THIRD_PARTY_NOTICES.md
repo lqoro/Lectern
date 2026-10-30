@@ -21,6 +21,7 @@ licence texts**.
 | [Python](https://www.python.org) | 3.12 | PSF License |
 | Python packages (table below), frozen with [PyInstaller](https://pyinstaller.org) | | as listed; PyInstaller's bootloader is GPL-2.0 with an exception that allows bundling |
 | [PortAudio](https://www.portaudio.com) (inside sounddevice) | | MIT-style |
+| [Sparkle](https://sparkle-project.org) (in-app updates; Mac app only) | 2.10.0, with its XPC services left out | MIT, with the licences of the few components it includes (its `LICENSE` file is in the app) |
 
 ## Included in the Windows beta (zip)
 
