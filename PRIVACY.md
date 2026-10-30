@@ -34,8 +34,8 @@
 Once a day, and when you press **Check now**, the Mac app downloads one small
 file, `appcast.xml`, from the Lectern website (lectern-ten.vercel.app) to see
 whether a newer version exists. The request carries what any web request
-carries: your IP address, plus the Lectern and Sparkle (the update tool)
-version numbers. It contains no recordings, transcripts, lecture names, device
+carries: your IP address, your system language, and the Lectern and Sparkle
+(the update tool) version numbers. It contains no recordings, transcripts, lecture names, device
 identifiers or system profile. If a newer version exists, the app tells you and
 installs it only after you press Install; the update downloads from GitHub and
 its signature is checked against a key built into the app before it is used.

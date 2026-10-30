@@ -1412,6 +1412,7 @@ const DONATE_URL = "https://ko-fi.com/lqoro";
 if (/LecternMac\//.test(navigator.userAgent)) {
   $("donateLink").href = DONATE_URL;
   $("donateSec").classList.remove("hidden");
+  $("scHelper").classList.add("hidden");  // the Mac app has the shortcut built in
 }
 
 // Updates: the Mac app (Sparkle) answers through a native bridge; anywhere else
