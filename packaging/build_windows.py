@@ -36,6 +36,10 @@ PINS = {
 }
 SHA_FILE = Path(__file__).with_name("windows-pins.json")
 MSVC_RUNTIME = "14.51.36231"
+MSVC_WHEEL_SHA256 = "89f70d1a37bb64164cdb09d02dd82d6b1400e1310be2995b4ed5a9f23efe2222"
+# requirements.txt resolved once to exact wheels with hashes, so the zip never
+# ships a Flask or Waitress release that appeared after testing.
+LOCK_FILE = Path(__file__).with_name("windows-requirements.lock")
 MSVC_DLLS = ("msvcp140.dll", "vcomp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")
 
 # What of the repo goes into the app. Mac-only launchers and Swift helpers stay out.
@@ -83,10 +87,12 @@ https://github.com/lqoro/Lectern/issues
 
 
 def fetch(name: str, url: str, pins: dict) -> Path:
-    dest = CACHE / url.rsplit("/", 1)[1]
+    # Cached by address, not file name: whisper's zip is always called
+    # whisper-bin-x64.zip, so a new tag must never reuse the old download.
+    dest = CACHE / hashlib.sha256(url.encode()).hexdigest()[:12] / url.rsplit("/", 1)[1]
     if not dest.exists():
         print(f"  downloading {name}: {url}")
-        CACHE.mkdir(parents=True, exist_ok=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(".part")
         with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as f:
             shutil.copyfileobj(r, f)
@@ -127,7 +133,7 @@ def build_python(dist: Path, py_zip: Path) -> None:
     subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
                     "--target", str(site), "--platform", "win_amd64", "--python-version", tag,
                     "--implementation", "cp", "--only-binary=:all:", "--no-compile",
-                    "-r", str(ROOT / "requirements.txt")], check=True)
+                    "--require-hashes", "-r", str(LOCK_FILE)], check=True)
     for junk in site.glob("*/__pycache__"):
         shutil.rmtree(junk)
     shutil.rmtree(site / "bin", ignore_errors=True)
@@ -135,9 +141,11 @@ def build_python(dist: Path, py_zip: Path) -> None:
 
 def build_bin(dist: Path, whisper_zip: Path, ffmpeg_zip: Path) -> None:
     bindir = dist / "bin"
-    # whisper.cpp: the CLI and its DLLs (ggml, whisper) only.
+    # whisper.cpp: the CLI, whisper.dll and ggml (which loads its ggml-cpu-*
+    # variants at run time). Not llama/parakeet/SDL2: whisper-cli never loads them.
     n = unzip_members(whisper_zip, bindir, lambda f: (
-        Path(f).name if Path(f).name in ("whisper-cli.exe",) or f.endswith(".dll") else None))
+        Path(f).name if Path(f).name in ("whisper-cli.exe", "whisper.dll")
+        or (Path(f).name.startswith("ggml") and f.endswith(".dll")) else None))
     if not (bindir / "whisper-cli.exe").exists():
         sys.exit("whisper-cli.exe not found in the whisper.cpp zip")
     # ffmpeg shared build: ffmpeg/ffprobe plus the libav* DLLs; no ffplay.
@@ -154,6 +162,8 @@ def build_bin(dist: Path, whisper_zip: Path, ffmpeg_zip: Path) -> None:
                         f"msvc-runtime=={MSVC_RUNTIME}", "--platform", "win_amd64", "--only-binary=:all:",
                         "--python-version", "312", "--no-deps", "-d", str(wheel_dir)], check=True)
     wheel = next(wheel_dir.glob(f"msvc_runtime-{MSVC_RUNTIME}-*.whl"))
+    if hashlib.sha256(wheel.read_bytes()).hexdigest() != MSVC_WHEEL_SHA256:
+        sys.exit(f"{wheel.name}: SHA-256 changed; check it, then update MSVC_WHEEL_SHA256")
     n += unzip_members(wheel, bindir, lambda f: (
         Path(f).name if "/Scripts/" in f and Path(f).name.lower() in MSVC_DLLS else None))
     missing = [d for d in MSVC_DLLS if not (bindir / d).exists()]

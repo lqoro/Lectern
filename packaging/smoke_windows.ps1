@@ -38,6 +38,7 @@ $tts.Dispose()
 Step "start Lectern"
 $env:LECTERN_ROOT = "$work\Lectures"; $env:LECTERN_SUPPORT = "$work\support"
 $env:LECTERN_BIN_DIR = $bin; $env:LECTERN_MODEL = $model; $env:LECTERN_NOTES = "extractive"
+$env:LECTERN_PORT = "$Port"
 $server = Start-Process $py -ArgumentList "-m", "lectern" -WorkingDirectory $App -PassThru -NoNewWindow `
   -RedirectStandardOutput "$work\server.out" -RedirectStandardError "$work\server.err"
 $base = "http://127.0.0.1:$Port"
