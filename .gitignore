@@ -9,12 +9,14 @@ backup-*.tar.gz
 # Developer-only: benchmark (uses real lecture recordings) and handoff notes
 bench/
 HANDOFF.md
+HANDOFF-redesign.md
 
 # Machine-local
 .DS_Store
 .claude/
 x-post-draft.md
+redesign/
 
-# Windows beta build output
+# Build output: Windows beta (packaging/build_windows.py) and Lectern.app (packaging/macos/build_app.py)
 build/
 dist/

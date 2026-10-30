@@ -14,23 +14,38 @@
 <link rel="icon" type="image/png" sizes="512x512" href="/web/icon-512.png">
 </head>
 <body>
+<div class="app">
+<aside class="sidebar" id="sidebar" aria-label="Classes">
+  <div class="brand">
+    <img src="/web/icon-180.png" alt="" width="28" height="28">
+    <div><b>Lectern</b><span>On this computer</span></div>
+  </div>
+  <p class="side-head">Classes</p>
+  <ul id="folderList" class="folders"></ul>
+  <button id="newFolderBtn" class="addfolder">New class</button>
+  <div class="side-foot">
+    <p id="storageLine" class="storage-line"></p>
+    <button id="settingsBtn" class="side-btn" aria-label="Settings"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.7M8 12.5v1.7M14.2 8h-1.7M3.5 8H1.8M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2M12.4 12.4l-1.2-1.2M4.8 4.8 3.6 3.6"/></svg>Settings</button>
+  </div>
+</aside>
+<div class="main-col">
 <header class="bar">
-  <button id="backBtn" class="ghost hidden" title="Back to library">‹</button>
+  <button id="menuBtn" class="icon-btn menu-btn" aria-label="Show classes" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg></button>
+  <button id="backBtn" class="icon-btn hidden" title="Back to library" aria-label="Back to library"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg></button>
   <h1 id="appTitle">Lectern</h1>
   <div class="grow"></div>
-  <div id="recPill" class="pill hidden">
+  <div id="recPill" class="pill hidden" role="status">
     <span class="dot"></span>
     <span id="recTime">00:00</span>
-    <span class="meter"><i id="meterFill"></i></span>
-    <button id="pauseBtn" class="ghost" title="Pause — resume any time, nothing is lost">Pause</button>
+    <span class="meter" aria-hidden="true"><i id="meterFill"></i></span>
+    <button id="pauseBtn" class="ghost" title="Pause: resume any time, nothing is lost">Pause</button>
     <button id="stopBtn" class="danger">Stop</button>
   </div>
-  <button id="settingsBtn" class="ghost" title="Settings: speech model, diagnostics" aria-label="Settings">⚙</button>
-  <button id="importBtn" class="ghost" title="Transcribe a downloaded lecture video or audio file">Import</button>
-  <button id="newBtn" class="primary">Record a lecture</button>
+  <button id="importBtn" title="Transcribe a downloaded lecture video or audio file">Import</button>
+  <button id="newBtn" class="primary"><span class="rec-dot" aria-hidden="true"></span>Record a lecture</button>
 </header>
 <div id="modelBanner" class="banner hidden" role="status">
-  <span id="modelBannerText">Before your first lecture, download a speech model — it turns the audio into text.</span>
+  <span id="modelBannerText">Before your first lecture, download a speech model. It turns the audio into text.</span>
   <button id="modelBannerGo" class="primary tiny hidden">Download</button>
   <button id="modelBannerBtn" class="ghost tiny">See all models</button>
 </div>
@@ -38,16 +53,14 @@
 <main id="main">
   <!-- LIBRARY -->
   <section id="library" class="view">
-    <aside class="sidebar">
-      <div class="side-head">Classes</div>
-      <ul id="folderList" class="folders"></ul>
-      <button id="newFolderBtn" class="ghost addfolder">+ New class</button>
-      <div class="side-foot" id="storageLine"></div>
-    </aside>
     <div class="lib-main">
+      <div class="lib-head">
+        <h2 id="libTitle">All lectures</h2>
+        <p id="libSub" class="sub"></p>
+      </div>
       <div id="libEmpty" class="empty hidden">
         <h2>No lectures yet</h2>
-        <p>Hit <b>Record a lecture</b> when class starts. Everything stays on this Mac.</p>
+        <p>Press <b>Record a lecture</b> when class starts, or import a recording you already have. Everything stays on this computer.</p>
       </div>
       <ul id="lectureList" class="cards"></ul>
     </div>
@@ -59,13 +72,13 @@
       <div class="title-row">
         <h2 id="lecTitle">…</h2>
         <input id="lecTitleEdit" class="title-edit hidden">
-        <button id="renameBtn" class="icon-btn" title="Rename">✎</button>
+        <button id="renameBtn" class="icon-btn" title="Rename" aria-label="Rename"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10.5 2.5 3 3L6 13H3v-3z"/></svg></button>
         <div class="grow"></div>
         <div class="dl-menu">
-          <button id="dlBtn" class="icon-btn" title="Download files">⭳</button>
+          <button id="dlBtn" class="icon-btn" title="Download files" aria-label="Download files"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10"/></svg></button>
           <div id="dlList" class="dl-list hidden"></div>
         </div>
-        <button id="deleteBtn" class="icon-btn danger-hover" title="Delete lecture">🗑</button>
+        <button id="deleteBtn" class="icon-btn danger-hover" title="Delete lecture" aria-label="Delete lecture"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9h5.8l.6-9"/></svg></button>
       </div>
       <div id="lecMeta" class="meta"></div>
       <div class="class-row">
@@ -85,6 +98,23 @@
       <div class="bar-track"><i id="jobFill"></i></div>
       <p class="hint" id="jobHint"></p>
     </div>
+    <div id="player" class="player hidden">
+      <button id="playBtn" class="play" aria-label="Play">▶</button>
+      <p class="clock"><span id="curTime" class="t">0:00</span> <span class="of">/ <span id="durTime" class="t">0:00</span></span></p>
+      <select id="rate" title="Playback speed (keys: [ slower, ] faster, \ normal)" aria-label="Playback speed">
+        <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
+        <option value="1">1×</option><option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option><option value="1.75">1.75×</option>
+        <option value="2">2×</option>
+      </select>
+      <div class="tape" id="tape">
+        <svg id="tapeSvg" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <i id="tapeHead" class="tape-head"></i>
+        <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position in lecture">
+        <div id="tapeScale" class="tape-scale" aria-hidden="true"></div>
+      </div>
+      <audio id="audio" preload="metadata"></audio>
+    </div>
     <div class="tabs" id="paneTabs">
       <button data-tab="notes" class="on">Notes</button>
       <button data-tab="transcript">Transcript</button>
@@ -101,27 +131,17 @@
         <div class="pane-head">
           <h3>Transcript</h3>
           <button id="jumpNow" class="tiny hidden" title="Scroll back to what is playing and follow along">Jump to current</button>
-          <label class="follow"><input type="checkbox" id="followChk" checked> Follow audio</label>
+          <label class="follow"><input type="checkbox" id="followChk" role="switch" checked> Follow audio</label>
         </div>
         <div id="transcript" class="transcript"></div>
       </div>
     </div>
   </section>
 </main>
+</div>
+</div>
 
-<footer id="player" class="player hidden">
-  <button id="playBtn" class="play">▶</button>
-  <span id="curTime" class="t">0:00</span>
-  <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1">
-  <span id="durTime" class="t">0:00</span>
-  <select id="rate" title="Playback speed (keys: [ slower, ] faster, \ normal)" aria-label="Playback speed">
-    <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
-    <option value="1">1×</option><option value="1.25">1.25×</option>
-    <option value="1.5">1.5×</option><option value="1.75">1.75×</option>
-    <option value="2">2×</option>
-  </select>
-  <audio id="audio" preload="metadata"></audio>
-</footer>
+
 
 <!-- New recording dialog -->
 <dialog id="newDlg">
@@ -190,46 +210,60 @@
 <dialog id="settingsDlg">
   <div class="set-wrap">
     <h3>Settings</h3>
-    <h4>Speech model</h4>
-    <p class="hint" id="setHw">Checking this computer…</p>
-    <p class="hint rec" id="setRec"></p>
-    <p class="hint">The model turns speech into text. Bigger is more accurate but slower and
-    needs more memory. Downloads only happen when you press a button.</p>
-    <ul id="modelList" class="models"></ul>
-    <div id="dlProgress" class="hidden">
-      <div class="job-row"><span id="dlLabel"></span><button id="dlCancel" class="ghost tiny">Cancel</button></div>
-      <div class="bar-track"><i id="dlFill"></i></div>
-    </div>
-    <p class="hint err hidden" id="dlError"></p>
-    <h4>Storage</h4>
-    <div id="storage" class="storage" aria-live="polite">
-      <p class="hint">Measuring…</p>
-    </div>
-    <h4>Quick record</h4>
-    <p class="hint">One shortcut starts a recording from anywhere, titled with the date and time;
-    the same shortcut stops it and starts transcribing. Needs the menu bar helper
-    (<code>./install.sh --menubar</code>).</p>
-    <div class="shortcut-row">
-      <label class="check"><input type="checkbox" id="scEnabled"> Enabled</label>
-      <button type="button" id="scBtn" class="ghost kbd" aria-describedby="scHint">⌘L</button>
-    </div>
-    <p class="hint" id="scHint"></p>
-    <h4>Help</h4>
-    <p class="hint">Copy system details to paste into a bug report. Nothing is sent
-    anywhere; no lecture content is included.</p>
-    <textarea id="diagText" class="diag hidden" readonly rows="8" aria-label="Diagnostics"></textarea>
-    <p class="links" id="helpLinks"></p>
-    <h4>Legal</h4>
-    <p class="links">
-      <a href="#" data-legal="terms">Terms &amp; recording notice</a>
-      <a href="#" data-legal="privacy">Privacy</a>
-      <a href="#" data-legal="notices">Third-party licences</a>
-      <a href="#" data-legal="license">Lectern licence (MIT)</a>
-      <a href="#" data-legal="texts">Full licence texts</a>
-    </p>
-    <p class="hint">Lectern © 2026 lqoro, MIT License. Not affiliated with Apple, Microsoft, OpenAI or any school.</p>
+    <section class="set-sec">
+      <div class="set-label"><h4>Speech model</h4>
+        <p>Turns speech into text. Bigger is more accurate but slower and needs more memory. Downloads only happen when you press a button.</p></div>
+      <div>
+        <p class="hint" id="setHw">Checking this computer…</p>
+        <p class="hint rec" id="setRec"></p>
+        <ul id="modelList" class="models"></ul>
+        <div id="dlProgress" class="hidden">
+          <div class="job-row"><span id="dlLabel"></span><button id="dlCancel" class="ghost tiny">Cancel</button></div>
+          <div class="bar-track"><i id="dlFill"></i></div>
+        </div>
+        <p class="hint err hidden" id="dlError"></p>
+      </div>
+    </section>
+    <section class="set-sec">
+      <div class="set-label"><h4>Storage</h4><p>Recordings, transcripts, notes and models, all on this computer.</p></div>
+      <div id="storage" class="storage" aria-live="polite"><p class="hint">Measuring…</p></div>
+    </section>
+    <section class="set-sec">
+      <div class="set-label"><h4>Quick record</h4>
+        <p>One shortcut starts a recording from anywhere, titled with the date and time; the same shortcut stops it and starts transcribing.</p></div>
+      <div>
+        <div class="shortcut-row">
+          <label class="check"><input type="checkbox" id="scEnabled"> Enabled</label>
+          <button type="button" id="scBtn" class="kbd" aria-describedby="scHint">⌘L</button>
+        </div>
+        <p class="hint" id="scHint"></p>
+        <p class="hint">Needs the menu bar helper (<code>./install.sh --menubar</code>).</p>
+      </div>
+    </section>
+    <section class="set-sec hidden" id="donateSec">
+      <div class="set-label"><h4>Support Lectern</h4><p>Lectern is free, with no ads and no account. Donations keep it going.</p></div>
+      <div class="donate"><a id="donateLink" class="button-link" href="#" target="_blank" rel="noopener">Donate on Ko-fi</a>
+        <span class="hint" style="margin:0">Opens Ko-fi in your browser. A donation is a voluntary gift: it doesn't unlock anything, and Ko-fi handles the payment under its own terms.</span></div>
+    </section>
+    <section class="set-sec">
+      <div class="set-label"><h4>Help</h4><p>Copy system details to paste into a bug report. Nothing is sent anywhere; no lecture content is included.</p></div>
+      <div>
+        <button type="button" id="diagBtn">Copy diagnostics</button>
+        <textarea id="diagText" class="diag hidden" readonly rows="8" aria-label="Diagnostics"></textarea>
+        <p class="links" id="helpLinks"></p>
+      </div>
+    </section>
+    <section class="set-sec">
+      <div class="set-label"><h4>Legal</h4><p>Lectern © 2026 lqoro, MIT License. Not affiliated with Apple, Microsoft, OpenAI or any school.</p></div>
+      <p class="links" style="margin:0">
+        <a href="#" data-legal="terms">Terms &amp; recording notice</a>
+        <a href="#" data-legal="privacy">Privacy</a>
+        <a href="#" data-legal="notices">Third-party licences</a>
+        <a href="#" data-legal="license">Lectern licence (MIT)</a>
+        <a href="#" data-legal="texts">Full licence texts</a>
+      </p>
+    </section>
     <menu>
-      <button type="button" id="diagBtn">Copy diagnostics</button>
       <button type="button" class="primary" data-close>Done</button>
     </menu>
   </div>
