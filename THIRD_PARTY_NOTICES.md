@@ -77,6 +77,7 @@ when you ask.
 | sounddevice (bundles PortAudio on macOS and Windows) | MIT (PortAudio: MIT-style) |
 | NumPy | BSD-3-Clause (bundled libraries have their own permissive licences) |
 | psutil | BSD-3-Clause |
+| certifi (CA certificate bundle) | MPL-2.0 |
 | cffi, pycparser (used by sounddevice) | MIT, BSD-3-Clause |
 
 ## Apple frameworks

@@ -15,6 +15,7 @@ import hashlib
 import json
 import logging
 import os
+import ssl
 import threading
 import time
 import urllib.error
@@ -23,6 +24,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import config, hardware, storage
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """The packaged Mac app has no system certificate store of its own, so
+    HTTPS downloads trust the CA bundle that ships inside it (certifi)."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
 
 log = logging.getLogger(__name__)
 
@@ -336,7 +347,7 @@ class Downloader:
         if have:
             req.add_header("Range", f"bytes={have}-")
         try:
-            resp = urllib.request.urlopen(req, timeout=30)
+            resp = urllib.request.urlopen(req, timeout=30, context=_ssl_context())
         except urllib.error.HTTPError as e:
             if e.code == 416 and have:           # already complete?
                 _check_model_file(part, model)
