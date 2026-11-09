@@ -38,6 +38,7 @@ import argparse
 import hashlib
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -183,6 +184,31 @@ def build_whisper() -> Path:
     return out
 
 
+def vendor_nemo_text(src: Path) -> None:
+    """Fetch FluidAudio's one prebuilt dependency ourselves, with retries, and point both Package
+    files at the local copy. SwiftPM gives up on the first GitHub 5xx; the checksum the FluidAudio
+    commit pins is still enforced here, so the bytes are exactly the ones it asks for."""
+    pat = re.compile(r'\.binaryTarget\(\s*name:\s*"NemoTextProcessing",\s*url:\s*"([^"]+)",'
+                     r'\s*checksum:\s*"([0-9a-f]{64})"\s*\)')
+    zip_path = src / "NemoTextProcessing.xcframework.zip"
+    for name in ("Package.swift", "Package@swift-6.2.swift"):
+        pkg = src / name
+        m = pat.search(pkg.read_text()) if pkg.is_file() else None
+        if not m:
+            continue
+        url, want = m.groups()
+        if not zip_path.is_file() or hashlib.sha256(zip_path.read_bytes()).hexdigest() != want:
+            say("Downloading NemoTextProcessing (FluidAudio dependency)")
+            run(["curl", "-fL", "--retry", "8", "--retry-delay", "5", "--retry-all-errors",
+                 "-o", zip_path, url])
+        got = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+        if got != want:
+            zip_path.unlink()
+            raise SystemExit(f"NemoTextProcessing checksum {got}, expected {want}")
+        pkg.write_text(pat.sub('.binaryTarget(name: "NemoTextProcessing", '
+                               'path: "NemoTextProcessing.xcframework.zip")', pkg.read_text()))
+
+
 def build_fluidaudio() -> Path:
     """fluidaudiocli from the pinned commit. Its Package.swift fetches one prebuilt library
     (NemoTextProcessing) by checksum, so this step needs the network the first time."""
@@ -199,6 +225,7 @@ def build_fluidaudio() -> Path:
     head = subprocess.check_output(["git", "-C", str(src), "rev-parse", "HEAD"], text=True).strip()
     if head != FLUIDAUDIO_COMMIT:
         raise SystemExit(f"FluidAudio checkout is {head}, expected {FLUIDAUDIO_COMMIT}")
+    vendor_nemo_text(src)
     run(["swift", "build", "-c", "release", "--product", "fluidaudiocli",
          "--package-path", src, "--scratch-path", src / ".build"])
     shutil.copy2(src / ".build" / "release" / "fluidaudiocli", out)
