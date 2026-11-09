@@ -1,0 +1,8 @@
+<h3>What's new in Lectern 0.3.0</h3>
+<ul>
+  <li><b>A much faster speech model.</b> On Apple Silicon Macs running macOS 14 or newer, Lectern now offers <b>Fastest (Parakeet)</b>, which runs on the Neural Engine. On an M4, two real livestream recordings (112 and 326 minutes) transcribed about <b>16&ndash;18&times; faster</b> than with the model most of you have been using so far (Balanced, large-v3-turbo q5). The 112-minute one took 19 seconds instead of 5 minutes 23.</li>
+  <li><b>Accuracy is similar for English.</b> Across those two recordings the words matched 95&ndash;97% of the time; most of the difference was foreign-language stretches where the old model made things up. Parakeet is the new recommended model on supported Macs.</li>
+  <li><b>Your current model keeps working.</b> Lectern shows a banner offering the download (about 555 MB). Until it finishes, nothing changes, and you can say &ldquo;Not now&rdquo;. If Parakeet ever fails on a lecture, Lectern retries it with your previous model.</li>
+  <li><b>Intel Macs and macOS 12&ndash;13</b> keep using the Whisper models exactly as before.</li>
+  <li>Speeds are measured on an M4 Mac. Other chips will differ; M1 and M1 Pro numbers will follow.</li>
+</ul>

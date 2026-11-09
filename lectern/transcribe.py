@@ -19,6 +19,7 @@ Flags, and why each one is present:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import threading
@@ -26,6 +27,8 @@ from pathlib import Path
 
 from . import config, hardware, models
 from . import platform_compat as pc
+
+log = logging.getLogger(__name__)
 
 # Whisper special tokens: [_BEG_], [_EOT_], [_SOT_], and timestamp tokens
 # like [_TT_519] which end in a digit, not an underscore.
@@ -43,6 +46,8 @@ _ANNOTATION = re.compile(
     r'|\[[A-Z][A-Z_ ]{2,}\]'      # [BLANK_AUDIO], [MUSIC PLAYING]
     r'|\([a-z][a-z ]{3,}\)'       # (coughing), (laughter) - never "(a)", "(12)"
     r')[.,!?]?$')
+# Parakeet transcribes hesitations ("uh", "um"); whisper does not. They are noise in study notes.
+_FILLER = re.compile(r'^(?:uh+|um+|uhm+|erm|hmm+|mm+)[,.?!]?$', re.I)
 MAX_WORDS_PER_SENT = 45          # guards a stretch with no punctuation
 MAX_ANNOTATION_WORDS = 12        # longest "*audio: "I'm sorry"*" span we drop
 
@@ -51,31 +56,41 @@ class TranscriptionError(RuntimeError):
     pass
 
 
-def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None) -> Path:
-    model = models.active_path()
+def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | None = None) -> Path:
+    model = model or models.active_path()
     if model is None:
         raise TranscriptionError(
             "no speech model is installed. Open Settings and download one "
             f"(or put a ggml-*.bin file in {models.MODELS_DIR}).")
-    if not model.is_file():
+    if not model.exists():
         raise TranscriptionError(f"model not found: {model}")
-    argv = [
-        config.WHISPER_CLI,
-        "-m", str(model),
-        "-f", str(wav),
-        "-ojf",
-        "-of", str(out_prefix),
-        "-t", str(hardware.whisper_threads()),
-        "-bs", str(config.WHISPER_BEAM),
-        "-l", config.WHISPER_LANG,
-        "-mc", "0",
-        "-sns",
-        "-pp",
-    ]
+    out = Path(str(out_prefix) + ".json")
+    coreml = model.is_dir()
+    if coreml:
+        # Parakeet on the Neural Engine. No language or beam flags: v3 detects the language and
+        # decodes greedily. Its own JSON is converted to whisper's shape below.
+        fa_out = Path(str(out_prefix) + ".fluidaudio.json")
+        argv = [config.FLUIDAUDIO_CLI, "transcribe", str(wav), "--local-model-dir", str(model),
+                "--encoder-precision", "int8-v2", "--word-timestamps", "--output-json", str(fa_out)]
+    else:
+        argv = [
+            config.WHISPER_CLI,
+            "-m", str(model),
+            "-f", str(wav),
+            "-ojf",
+            "-of", str(out_prefix),
+            "-t", str(hardware.whisper_threads()),
+            "-bs", str(config.WHISPER_BEAM),
+            "-l", config.WHISPER_LANG,
+            "-mc", "0",
+            "-sns",
+            "-pp",
+        ]
 
     # Below-normal priority: on a weak machine a full-tilt whisper starves the
     # browser and, worse, the recorder of the NEXT lecture, which drops audio.
     # Priority is inherited, so it is set on the child, never on the backend.
+    name = Path(argv[0]).name                  # before low_priority puts `nice` in front
     argv, extra = pc.low_priority(argv)
     try:
         proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL,
@@ -83,7 +98,7 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None) -> Path:
                                 bufsize=1, **extra)
     except FileNotFoundError:
         raise TranscriptionError(
-            "whisper-cli is not installed (on a Mac: brew install whisper-cpp)") from None
+            f"{name} is not installed (for whisper-cli on a Mac: brew install whisper-cpp)") from None
     # A hung whisper (GPU stall) holds the stage lock and would block every
     # later lecture forever, so it gets a generous deadline and is killed.
     deadline_s = _whisper_deadline_s(wav)
@@ -108,12 +123,56 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None) -> Path:
         if proc.poll() is None:                    # never leave an orphan
             proc.kill()
             proc.wait()
-    out = Path(str(out_prefix) + ".json")
-    if rc != 0 or not out.is_file():
-        why = (f"whisper-cli took longer than {deadline_s / 60:.0f} min and was stopped"
-               if rc in (-9, 137) else f"whisper-cli exited {rc}")
+    done = fa_out if coreml else out
+    if rc != 0 or not done.is_file():
+        why = (f"{name} took longer than {deadline_s / 60:.0f} min and was stopped"
+               if rc in (-9, 137) else f"{name} exited {rc}")
         raise TranscriptionError(why + "\n" + "".join(tail)[-1500:])
+    if coreml:
+        _fluidaudio_to_whisper_json(fa_out, out)
+        fa_out.unlink(missing_ok=True)
+        if progress_cb:
+            progress_cb(100)        # the CLI reports no progress; the whole job takes seconds
     return out
+
+
+# FluidAudio stamps a word ~180 ms later than whisper does (median over a 112 min lecture; flat
+# from the first to the last minute). Shifting earlier keeps click-to-jump where whisper put it.
+# shortcut: one constant calibrated against whisper on one speaker, not a forced alignment.
+_FLUIDAUDIO_LEAD_MS = 180
+
+
+def _fluidaudio_to_whisper_json(src: Path, dst: Path) -> None:
+    """FluidAudio's wordTimings -> whisper -ojf shape, so normalize() is shared."""
+    try:
+        words = json.loads(src.read_text()).get("wordTimings") or []
+    except json.JSONDecodeError as e:
+        raise TranscriptionError(f"fluidaudio JSON is unparseable: {e}") from e
+
+    def ms(sec: float) -> int:
+        return max(0, round(sec * 1000) - _FLUIDAUDIO_LEAD_MS)
+
+    try:
+        toks = [{"text": " " + w["word"], "offsets": {"from": ms(w["startTime"]), "to": ms(w["endTime"])},
+                 "p": w.get("confidence", 1.0)} for w in words]
+    except (KeyError, TypeError) as e:
+        raise TranscriptionError(f"fluidaudio JSON has an unexpected shape: {e!r}") from e
+    dst.write_text(json.dumps({"transcription": [{"tokens": toks}]}))
+
+
+def run_with_fallback(wav: Path, out_prefix: Path, *, progress_cb=None) -> tuple[Path, str]:
+    """run_whisper, and when the Parakeet (CoreML) model fails, once more with the best installed
+    whisper model so a lecture is not lost. Returns the JSON and the id of the model that made it."""
+    path, model, _ = models.active()
+    try:
+        return run_whisper(wav, out_prefix, progress_cb=progress_cb), models.active_name()
+    except TranscriptionError as e:
+        spare = next((m for m in models.installed() if not m.is_folder), None)
+        if path is None or not path.is_dir() or spare is None:
+            raise
+        log.warning("%s failed (%s); falling back to %s", model.id if model else path.name, e, spare.id)
+        return run_whisper(wav, out_prefix, progress_cb=progress_cb,
+                           model=models.installed_path(spare)), spare.id
 
 
 _WAV_BYTES_PER_S = 32_000            # 16 kHz mono s16le
@@ -174,7 +233,7 @@ def normalize(raw_json: Path, duration_ms: int) -> dict:
     # Annotations must be filtered AFTER assembly: whisper splits "*music*" into
     # the separate tokens "*", "music", "*", so the complete word only exists here.
     if w_text:
-        drop = {i for i, w in enumerate(w_text) if _ANNOTATION.match(w)}
+        drop = {i for i, w in enumerate(w_text) if _ANNOTATION.match(w) or _FILLER.match(w)}
         drop |= _annotation_spans(w_text)
         keep = [i for i in range(len(w_text)) if i not in drop]
         if len(keep) != len(w_text):

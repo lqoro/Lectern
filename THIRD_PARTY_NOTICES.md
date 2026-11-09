@@ -21,6 +21,7 @@ licence texts**.
 | [Python](https://www.python.org) | 3.12 | PSF License |
 | Python packages (table below), frozen with [PyInstaller](https://pyinstaller.org) | | as listed; PyInstaller's bootloader is GPL-2.0 with an exception that allows bundling |
 | [PortAudio](https://www.portaudio.com) (inside sounddevice) | | MIT-style |
+| [FluidAudio](https://github.com/FluidInference/FluidAudio) (`fluidaudiocli`, runs the Parakeet model on the Neural Engine) | commit `e63b5230`, built from source with its `NemoTextProcessing` binary component | Apache-2.0; the licences of its bundled components are in the app (`FluidAudio-LICENSE` and `FluidAudio-*.md`) |
 | [Sparkle](https://sparkle-project.org) (in-app updates; Mac app only) | 2.10.0, with its XPC services left out | MIT, with the licences of the few components it includes (its `LICENSE` file is in the app) |
 
 ## Included in the Windows beta (zip)
@@ -57,6 +58,15 @@ own build.
 
 Speech models and the notes model are never bundled. They are downloaded only
 when you ask.
+
+### Parakeet speech model (downloaded on demand)
+
+The fastest speech model Lectern offers on Apple Silicon is
+[NVIDIA Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3),
+licensed **CC-BY-4.0** (Copyright NVIDIA Corporation). Lectern downloads the
+CoreML conversion made by [FluidInference](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml)
+(the same weights converted to CoreML, under the same CC-BY-4.0 licence) from the Lectern
+release page, when you press Download. It is not part of the app.
 
 ## Installed separately (not distributed with Lectern)
 

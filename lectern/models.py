@@ -11,15 +11,19 @@ not measurements: the benchmark has no CPU-only run yet.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import logging
 import os
 import ssl
 import threading
+import platform
+import shutil
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,6 +44,10 @@ log = logging.getLogger(__name__)
 BASE_URL = os.environ.get(
     "LECTERN_MODEL_BASE_URL",
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main")
+
+# Parakeet is a folder of CoreML models, shipped as one zip on a Lectern GitHub release.
+ASSET_URL = os.environ.get("LECTERN_MODEL_BASE_URL",
+                           "https://github.com/lqoro/Lectern/releases/download/models-v1")
 
 LEGACY_DIR = Path.home() / ".localflow" / "models"
 # A developer's benchmark downloads (bench/models, not in the repo) live here; use them rather than
@@ -69,6 +77,13 @@ class Model:
     # SHA-256 of `file` as published (Hugging Face LFS oid). A download that
     # does not match is never installed.
     sha256: str = ""
+    # Set for a model that is a folder (CoreML) published as a zip with this name: `file` is then the
+    # folder it unzips to, `size_mb` and `sha256` describe the zip.
+    asset: str = ""
+
+    @property
+    def is_folder(self) -> bool:
+        return bool(self.asset)
 
 
 # Ordered best-quality first. Measured 2026-10-26 on an M1:
@@ -85,6 +100,13 @@ CATALOG: tuple[Model, ...] = (
           "Balanced (default)", "Near-large accuracy at about twice the speed.",
           xrt_gpu=9.0, xrt_cpu=3.1,
           sha256="394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"),
+    # NVIDIA Parakeet TDT 0.6B v3 (CC-BY-4.0), CoreML conversion by FluidInference, run by
+    # bin/fluidaudiocli on the Neural Engine. Apple Silicon and macOS 14+ only (see recommend).
+    # Measured on an M4: 322x real time, 0.4 GB RAM on a 2 h lecture; 97% word agreement with turbo.
+    Model("parakeet-tdt-0.6b-v3-coreml", "parakeet-tdt-0.6b-v3-coreml", 555, 400, 4,
+          "Fastest (Parakeet)", "NVIDIA Parakeet on the Neural Engine: a lecture transcribes in a fraction of the time, with similar accuracy.",
+          xrt_gpu=322.0, xrt_cpu=0.0, asset="parakeet-tdt-0.6b-v3-coreml.zip",
+          sha256="dc345e55f08452b3cdefd23602b32f906322a6d95387249fafb5a97fd51a853b"),
     Model("small.en", "ggml-small.en-q5_1.bin", 190, 382, 3,
           "Light", "Good for older or low-memory computers. English only.",
           alts=(("ggml-small.en.bin", 488),), xrt_gpu=23.2, xrt_cpu=10.4,
@@ -130,6 +152,10 @@ def installed_path(model: Model) -> Path | None:
     for fname, size_mb in ((model.file, model.size_mb), *model.alts):
         for d in search_dirs():
             p = d / fname
+            if model.is_folder:                   # a CoreML folder is only a model once unzipped whole
+                if (p / "config.json").is_file():
+                    return p
+                continue
             # A partial or truncated file must not count as installed.
             if p.is_file() and p.stat().st_size >= size_mb * _MB * 0.9:
                 return p
@@ -152,11 +178,20 @@ def effective_mb(hw: dict) -> int:
     return hw.get("ram_effective_mb") or hw.get("ram_total_mb") or 0
 
 
+def _macos_major(hw: dict) -> int:
+    try:
+        return int(str(hw.get("macos") or "0").split(".")[0])
+    except ValueError:
+        return 0
+
+
 def recommend(hw: dict | None = None) -> Model:
     hw = hw or hardware.snapshot()
     ram_gb = effective_mb(hw) / 1024
     accel = hw.get("accelerator") or "cpu"
     cores = hw.get("cpu_cores") or 2
+    if accel == "metal" and _macos_major(hw) >= 14 and ram_gb >= 8:
+        return BY_ID["parakeet-tdt-0.6b-v3-coreml"]       # fluidaudiocli needs macOS 14
     if accel != "cpu":
         if ram_gb >= 8:
             return BY_ID["large-v3-turbo-q5_0"]
@@ -209,7 +244,9 @@ def recommend_why(m: Model, hw: dict) -> str:
     mins = minutes_per_hour(m, hw)
     took = f" An hour of lecture should take about {mins} min to transcribe." if mins else ""
     if hw.get("accelerator") == "metal":
-        base = (f"Apple chip with {ram_gb} GB: enough for the balanced model, which runs on the GPU."
+        base = (f"Apple chip with {ram_gb} GB: runs on the Neural Engine, much faster than the balanced model."
+                if m.is_folder else
+                f"Apple chip with {ram_gb} GB: enough for the balanced model, which runs on the GPU."
                 if m.id == "large-v3-turbo-q5_0" else
                 f"Apple chip with {ram_gb} GB: a lighter model leaves memory for your other apps.")
     elif m.id == "large-v3-turbo-q5_0":
@@ -248,6 +285,20 @@ def active() -> tuple[Path | None, Model | None, str]:
         m = have[-1]
         return installed_path(m), m, "only model installed"
     return None, None, "none installed"
+
+
+@functools.lru_cache(maxsize=1)
+def _recommended() -> Model:                 # the hardware does not change while the app runs
+    return recommend()
+
+
+def upgrade_offer() -> str | None:
+    """Id of the recommended model when it is a download-only CoreML folder that this computer does
+    not have yet, and some other model is installed. None otherwise."""
+    rec = _recommended()
+    if rec.is_folder and installed_path(rec) is None and installed():
+        return rec.id
+    return None
 
 
 def active_path() -> Path | None:
@@ -334,24 +385,24 @@ class Downloader:
     def _download(self, model: Model) -> None:
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
         dest = MODELS_DIR / model.file
-        part = dest.with_suffix(dest.suffix + ".part")
+        part = MODELS_DIR / ((model.asset or model.file) + ".part")
         have = part.stat().st_size if part.is_file() else 0
 
-        need = model.size_mb * _MB - have
+        need = model.size_mb * _MB - have + (model.size_mb * _MB if model.is_folder else 0)   # zip + unzipped
         free = hardware_free(MODELS_DIR)
         if free is not None and free < need + 200 * _MB:
             raise DownloadError(
                 f"not enough disk space: need about {need // _MB + 200} MB free")
 
-        req = urllib.request.Request(f"{BASE_URL}/{model.file}")
+        url = f"{ASSET_URL}/{model.asset}" if model.asset else f"{BASE_URL}/{model.file}"
+        req = urllib.request.Request(url)
         if have:
             req.add_header("Range", f"bytes={have}-")
         try:
             resp = urllib.request.urlopen(req, timeout=30, context=_ssl_context())
         except urllib.error.HTTPError as e:
             if e.code == 416 and have:           # already complete?
-                _check_model_file(part, model)
-                part.replace(dest)
+                _install(part, dest, model)
                 return
             raise DownloadError(f"download refused: HTTP {e.code}") from e
         except OSError as e:
@@ -381,10 +432,42 @@ class Downloader:
         if have != total:
             raise DownloadError(
                 f"download incomplete ({have} of {total} bytes); run it again to resume")
-        _check_model_file(part, model)
+        _install(part, dest, model)
+
+
+def _install(part: Path, dest: Path, model: Model) -> None:
+    _check_model_file(part, model)
+    if not model.is_folder:
         part.replace(dest)
+        return
+    _unzip_model(part, dest)
+    part.unlink(missing_ok=True)
 
 
+def _unzip_model(zpath: Path, dest: Path) -> None:
+    """Unzip into a temporary folder and rename it, so a half-unzipped model never counts as installed."""
+    tmp = dest.with_name(dest.name + ".unzipping")
+    shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        with zipfile.ZipFile(zpath) as z:
+            root = tmp.resolve()
+            for name in z.namelist():            # refuse paths that climb out of the folder
+                if not (tmp / name).resolve().is_relative_to(root):
+                    raise DownloadError("the downloaded model has an unsafe file path")
+            z.extractall(tmp)
+        inner = tmp / dest.name
+        if not (inner / "config.json").is_file():
+            raise DownloadError("the downloaded model is missing files. Try the download again.")
+        shutil.rmtree(dest, ignore_errors=True)
+        inner.rename(dest)
+    except (zipfile.BadZipFile, OSError) as e:
+        zpath.unlink(missing_ok=True)
+        raise DownloadError(f"could not unpack the model: {e}") from e
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+_ZIP_MAGIC = b"PK\x03\x04"
 _GGML_MAGIC = b"lmgg"            # whisper.cpp model files start with this
 _SIZE_TOLERANCE = 0.05
 
@@ -397,7 +480,7 @@ def _check_model_file(path: Path, model: Model) -> None:
     expected = model.size_mb * _MB
     with open(path, "rb") as f:
         magic = f.read(4)
-    if magic != _GGML_MAGIC or abs(size - expected) > expected * _SIZE_TOLERANCE:
+    if magic != (_ZIP_MAGIC if model.is_folder else _GGML_MAGIC) or abs(size - expected) > expected * _SIZE_TOLERANCE:
         path.unlink(missing_ok=True)
         raise DownloadError(
             "the downloaded file is not a valid speech model (a Wi-Fi login page "

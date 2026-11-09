@@ -72,6 +72,15 @@ class Selection(unittest.TestCase):
         self.assertEqual(r(16384, "cpu", 8), "large-v3-turbo-q5_0")
         self.assertEqual(r(8192, "cpu", 8), "small.en")
         self.assertEqual(r(8192, "cpu", 2), "base.en")
+        # Parakeet: Apple chip, macOS 14+, 8 GB or more. Older macOS cannot start its program.
+        p = lambda ram, accel, macos: self.m.recommend(
+            {"ram_total_mb": ram, "accelerator": accel, "cpu_cores": 8, "macos": macos}).id
+        self.assertEqual(p(8192, "metal", "14.0"), "parakeet-tdt-0.6b-v3-coreml")
+        self.assertEqual(p(16384, "metal", "26.1"), "parakeet-tdt-0.6b-v3-coreml")
+        self.assertEqual(p(8192, "metal", "13.6"), "large-v3-turbo-q5_0")
+        self.assertEqual(p(8192, "metal", ""), "large-v3-turbo-q5_0")
+        self.assertEqual(p(4096, "metal", "15.0"), "small.en")
+        self.assertEqual(p(16384, "cpu", "14.0"), "large-v3-turbo-q5_0")
         self.assertEqual(r(2048, "cpu", 2), "tiny.en")
 
     def test_windows_needs_twice_the_ram_of_a_mac(self):

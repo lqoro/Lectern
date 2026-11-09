@@ -217,6 +217,7 @@ def snapshot() -> dict:
     return {
         "os": platform.system(),
         "machine": platform.machine(),
+        "macos": platform.mac_ver()[0] if pc.IS_MAC else "",
         "python": sys.version.split()[0],
         "ram_total_mb": round(total / 2**20) if total else None,
         "ram_effective_mb": round(eff / 2**20) if eff else None,

@@ -6,7 +6,7 @@ from pathlib import Path
 from . import platform_compat as _pc
 
 APP_NAME = "Lectern"
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 # --- paths -------------------------------------------------------------
 # TRUTH: plain files, visible in Finder, outlive the app.
@@ -27,6 +27,10 @@ LOG_DIR = SUPPORT_DIR / "logs"
 FFMPEG = _pc.find_binary("ffmpeg", "LECTERN_FFMPEG", ("/opt/homebrew/bin/ffmpeg",))
 FFPROBE = _pc.find_binary("ffprobe", "LECTERN_FFPROBE", ("/opt/homebrew/bin/ffprobe",))
 WHISPER_CLI = _pc.find_binary("whisper-cli", "LECTERN_WHISPER", ("/opt/homebrew/bin/whisper-cli",))
+# FluidAudio's CLI runs NVIDIA Parakeet on the Neural Engine (CoreML), Apple Silicon + macOS 14.
+# Used when the active model is a CoreML folder; see transcribe.run_whisper.
+FLUIDAUDIO_CLI = _pc.find_binary("fluidaudiocli", "LECTERN_FLUIDAUDIO", (
+    str(Path(__file__).resolve().parent.parent / "bin" / "fluidaudio" / "fluidaudiocli"),))
 # The speech model is chosen at run time by models.active(); see models.py.
 
 # Native capture helper (see lectern_capture.swift for why ffmpeg's

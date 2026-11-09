@@ -11,7 +11,8 @@ so they download one file and run nothing in Terminal:
                                      server, shows Lectern in its own window and
                                      the menu bar mic, owns the microphone permission
       Resources/backend/lectern-server/   the Python server, frozen by PyInstaller
-      Resources/bin/                 whisper-cli, ffmpeg, ffprobe, lectern-capture
+      Resources/bin/                 whisper-cli, fluidaudiocli (Parakeet), ffmpeg, ffprobe,
+                                     lectern-capture
       Resources/licenses/            Lectern's licence and the bundled tools' licences
 
 The tools are built from pinned sources here, not copied from Homebrew: a
@@ -62,6 +63,10 @@ FFMPEG_TAG = os.environ.get("LECTERN_FFMPEG_TAG", "n8.1.3")
 # instead of shipping different source under the same name.
 COMMITS = {"v1.9.1": "f049fff95a089aa9969deb009cdd4892b3e74916",
            "n8.1.3": "1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7"}
+# FluidAudio runs NVIDIA Parakeet on the Neural Engine. Pinned by commit; its Package.swift needs
+# macOS 14, so Parakeet is only recommended there (models.recommend) and older Macs keep whisper.
+FLUIDAUDIO_URL = "https://github.com/FluidInference/FluidAudio"
+FLUIDAUDIO_COMMIT = "e63b5230ee7d7428848ab17d76a57c6197836684"
 PYINSTALLER = "pyinstaller>=6.10,<7"
 MIN_MACOS = "12.0"
 ARCH = "arm64"
@@ -175,6 +180,35 @@ def build_whisper() -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(bdir / "bin" / "whisper-cli", out)
     shutil.copy2(src / "LICENSE", out.parent / "whisper.cpp-LICENSE")
+    return out
+
+
+def build_fluidaudio() -> Path:
+    """fluidaudiocli from the pinned commit. Its Package.swift fetches one prebuilt library
+    (NemoTextProcessing) by checksum, so this step needs the network the first time."""
+    src = BUILD / f"fluidaudio-{FLUIDAUDIO_COMMIT[:8]}"
+    out = src / "fluidaudiocli"
+    if cached(out, [FLUIDAUDIO_COMMIT]):
+        return out
+    need("swift", "Install Xcode or the command line tools: xcode-select --install")
+    if not (src / ".git").is_dir():
+        src.mkdir(parents=True, exist_ok=True)
+        run(["git", "-C", src, "init", "-q"])
+        run(["git", "-C", src, "fetch", "--depth", "1", FLUIDAUDIO_URL, FLUIDAUDIO_COMMIT])
+        run(["git", "-C", src, "checkout", "-q", "FETCH_HEAD"])
+    head = subprocess.check_output(["git", "-C", str(src), "rev-parse", "HEAD"], text=True).strip()
+    if head != FLUIDAUDIO_COMMIT:
+        raise SystemExit(f"FluidAudio checkout is {head}, expected {FLUIDAUDIO_COMMIT}")
+    run(["swift", "build", "-c", "release", "--product", "fluidaudiocli",
+         "--package-path", src, "--scratch-path", src / ".build"])
+    shutil.copy2(src / ".build" / "release" / "fluidaudiocli", out)
+    # The linker leaves the Xcode toolchain's path in the binary; a student's Mac has no such folder.
+    for rp in subprocess.run(["otool", "-l", str(out)], capture_output=True, text=True,
+                             check=True).stdout.split("path ")[1:]:
+        path = rp.split(" (offset")[0]
+        if path.startswith("/Applications/") or "Toolchains" in path:
+            run(["install_name_tool", "-delete_rpath", path, out])
+    check_links(out)
     return out
 
 
@@ -327,7 +361,7 @@ def info_plist() -> dict:
 
 
 def assemble(menu: Path, capture: Path, backend: Path,
-             whisper: Path, ffmpeg: Path, ffprobe: Path, sparkle: Path) -> None:
+             whisper: Path, fluidaudio: Path, ffmpeg: Path, ffprobe: Path, sparkle: Path) -> None:
     say(f"Assembling {APP.relative_to(REPO)}")
     if APP.exists():
         set_aside(APP)
@@ -342,7 +376,7 @@ def assemble(menu: Path, capture: Path, backend: Path,
     shutil.copytree(sparkle / "Sparkle.framework", contents / "Frameworks" / "Sparkle.framework",
                     symlinks=True, ignore=shutil.ignore_patterns("XPCServices"))
     shutil.copytree(backend, res / "backend" / "lectern-server", symlinks=True)
-    for tool in (whisper, ffmpeg, ffprobe, capture):
+    for tool in (whisper, fluidaudio, ffmpeg, ffprobe, capture):
         check_links(tool)
         shutil.copy2(tool, bin_dir / tool.name)
     for f in (REPO / "LICENSE", REPO / "THIRD_PARTY_NOTICES.md",
@@ -352,6 +386,10 @@ def assemble(menu: Path, capture: Path, backend: Path,
         if f.is_file():
             shutil.copy2(f, lic / f.name)
     shutil.copy2(sparkle / "LICENSE", lic / "Sparkle-LICENSE")
+    fa = fluidaudio.parent
+    shutil.copy2(fa / "LICENSE", lic / "FluidAudio-LICENSE")
+    for f in sorted((fa / "ThirdPartyLicenses").glob("*.md")):
+        shutil.copy2(f, lic / f"FluidAudio-{f.name}")
     make_icon(res / "AppIcon.icns")
     with open(contents / "Info.plist", "wb") as f:
         plistlib.dump(info_plist(), f)
@@ -440,6 +478,8 @@ def smoke_test() -> None:
             proc.wait(timeout=15)
     run([res / "bin" / "whisper-cli", "--help"], stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL)
+    run([res / "bin" / "fluidaudiocli", "--help"], stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
     enc = subprocess.run([res / "bin" / "ffmpeg", "-hide_banner", "-encoders"],
                          capture_output=True, text=True, check=True).stdout
     assert " aac_at " in enc, "ffmpeg was built without the AudioToolbox AAC encoder"
@@ -478,11 +518,12 @@ def main() -> None:
 
     sparkle = fetch_sparkle()
     whisper = build_whisper()
+    fluidaudio = build_fluidaudio()
     ffmpeg, ffprobe = build_ffmpeg()
     capture = build_swift(config.CAPTURE_SRC, BUILD / "swift" / config.CAPTURE_BIN.name)
     menu = build_swift(REPO / "lectern" / "lectern_menubar.swift", BUILD / "swift" / EXE_NAME, sparkle)
     backend = build_backend()
-    assemble(menu, capture, backend, whisper, ffmpeg, ffprobe, sparkle)
+    assemble(menu, capture, backend, whisper, fluidaudio, ffmpeg, ffprobe, sparkle)
     sign(a.identity)
     if not a.skip_smoke:
         smoke_test()

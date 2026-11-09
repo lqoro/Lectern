@@ -1294,14 +1294,18 @@ document.addEventListener("click", (e) => {
 
 let recWasActive = false, recActive = false, recLectureId = null;
 let lastStopSeen = null;
-let bannerShown = false, bannerRec = null;   // first-run "download a model" banner
+let bannerShown = "", bannerRec = null;   // "" | "first" (no model yet) | "upgrade" (a faster model exists)
 async function poll() {
   let s;
   try { s = await api("/api/status"); } catch { return setTimeout(poll, 3000); }
-  if (s.needs_model !== bannerShown) {
-    bannerShown = s.needs_model;
-    $("modelBanner").classList.toggle("hidden", !s.needs_model);
-    if (s.needs_model) fillModelBanner();
+  let dismissed = null;
+  try { dismissed = localStorage.getItem("dismissUpgrade"); } catch { /* private mode */ }
+  const want = s.needs_model ? "first" : s.upgrade_model && s.upgrade_model !== dismissed ? "upgrade" : "";
+  if (want !== bannerShown) {
+    bannerShown = want;
+    $("modelBanner").classList.toggle("hidden", !want);
+    $("modelBannerNo").classList.toggle("hidden", want !== "upgrade");
+    if (want) fillModelBanner(want);
   }
   const pill = $("recPill");
   recActive = !!s.recording;
@@ -1535,7 +1539,7 @@ document.addEventListener("keydown", (e) => {
   stop();
   saveShortcut({ enabled: true, key: m[1] || m[2], mods });
 }, true);
-async function fillModelBanner() {
+async function fillModelBanner(kind) {
   try {
     const sys = await api("/api/system");
     bannerRec = sys.recommended;
@@ -1543,9 +1547,11 @@ async function fillModelBanner() {
     const specs = [dev.chip, ram && `${Math.round(ram / 1024)} GB`].filter(Boolean).join(", ");
     const what = dev.name ? `this ${dev.name}${specs ? ` (${specs})` : ""}` : "this computer";
     const label = sys.recommended_label.replace(/\s*\(default\)$/, "");
-    $("modelBannerText").textContent =
-      `Before your first lecture, download a speech model. Recommended for ${what}: ` +
-      `${label}, ${mbText(sys.recommended_size_mb)}.`;
+    $("modelBannerText").textContent = kind === "upgrade"
+      ? `A much faster speech model is available for ${what}: ${label}, ${mbText(sys.recommended_size_mb)}. ` +
+        `Your current model keeps working until it finishes downloading.`
+      : `Before your first lecture, download a speech model. Recommended for ${what}: ` +
+        `${label}, ${mbText(sys.recommended_size_mb)}.`;
     $("modelBannerGo").textContent = `Download ${label}`;
     $("modelBannerGo").classList.remove("hidden");
   } catch { /* keep the generic text */ }
@@ -1556,6 +1562,10 @@ $("modelBannerGo").onclick = async () => {
   $("settingsBtn").click();                       // shows the download progress
 };
 $("modelBannerBtn").onclick = () => $("settingsBtn").click();
+$("modelBannerNo").onclick = () => {
+  try { localStorage.setItem("dismissUpgrade", bannerRec); } catch { /* private mode */ }
+  $("modelBanner").classList.add("hidden");
+};
 $("settingsDlg").addEventListener("close", () => clearTimeout(dlTimer));
 $("dlCancel").onclick = async () => { await jpost("/api/models/download/cancel"); setTimeout(loadSettings, 500); };
 

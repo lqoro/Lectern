@@ -248,8 +248,8 @@ class Pipeline:
                       f"transcribing… {p}%")
 
         t0 = time.time()
-        raw = transcribe.run_whisper(lec.master_wav, lec.work / "whisper.raw",
-                                     progress_cb=on_pct)
+        raw, model_id = transcribe.run_with_fallback(lec.master_wav, lec.work / "whisper.raw",
+                                                     progress_cb=on_pct)
         doc = transcribe.normalize(raw, dur)
         if not doc["words"]["w"]:
             raise RuntimeError("no speech was found in the recording")
@@ -262,7 +262,7 @@ class Pipeline:
             "words": len(doc["words"]["w"]),
             "sentences": len(doc["sents"]),
             "language": doc["language"],
-            "model": models.active_name(),
+            "model": model_id,
             "compute_s": round(time.time() - t0, 1),
         })
         self._set(job, "transcribing", 58,
