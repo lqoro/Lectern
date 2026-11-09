@@ -1378,7 +1378,11 @@ async function loadSettings() {
     main.append(name, el("div", "m-note", `${m.note} ${mbText(m.size_mb)} download.${eta}`));
     li.append(main);
     const btn = el("button", m.installed ? "" : "primary");
-    if (m.installed) {
+    if (m.needs_macos) {
+      btn.textContent = `Needs macOS ${m.needs_macos}`;
+      btn.disabled = true;
+      li.classList.add("unavailable");
+    } else if (m.installed) {
       btn.textContent = m.id === s.active.id ? "Selected" : "Use this";
       btn.disabled = m.id === s.active.id;
       btn.onclick = async () => {

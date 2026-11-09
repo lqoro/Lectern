@@ -86,6 +86,11 @@ class Selection(unittest.TestCase):
         self.assertTrue(self.m.available(q4, hw("metal", "12.0")))
         self.assertFalse(self.m.available(q4, hw("cpu", "14.0")))
         self.assertEqual(r(2048, "cpu", 2), "tiny.en")
+        # An old macOS on an Apple chip shows Parakeet greyed out; other chips never see it.
+        self.assertTrue(self.m.needs_newer_macos(pk, hw("metal", "13.6")))
+        self.assertFalse(self.m.needs_newer_macos(pk, hw("metal", "14.0")))
+        self.assertFalse(self.m.needs_newer_macos(pk, hw("cpu", "13.6")))
+        self.assertFalse(self.m.needs_newer_macos(q4, hw("metal", "12.0")))
 
     def test_windows_needs_twice_the_ram_of_a_mac(self):
         r = lambda os_name, gb, accel, cores: self.m.recommend({

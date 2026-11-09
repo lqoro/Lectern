@@ -217,6 +217,13 @@ def available(model: Model, hw: dict) -> bool:
     return not model.min_macos or _macos_major(hw) >= model.min_macos
 
 
+def needs_newer_macos(model: Model, hw: dict) -> bool:
+    """An Apple Silicon Mac that could run `model` if it had a newer macOS.
+    The list shows these greyed out, with the reason, instead of hiding them."""
+    return (not available(model, hw) and hw.get("accelerator") == "metal"
+            and bool(model.min_macos))
+
+
 def recommend(hw: dict | None = None) -> Model:
     hw = hw or hardware.snapshot()
     ram_gb = effective_mb(hw) / 1024
@@ -362,7 +369,9 @@ def describe() -> dict:
             "recommended": m.id == rec.id,
             "beta": m.beta,
             "min_per_hour": minutes_per_hour(m, hw),
-        } for m in CATALOG if available(m, hw) or installed_path(m)],
+            "needs_macos": m.min_macos if needs_newer_macos(m, hw) else 0,
+        } for m in CATALOG
+            if available(m, hw) or installed_path(m) or needs_newer_macos(m, hw)],
         "download": DOWNLOADER.status(),
     }
 

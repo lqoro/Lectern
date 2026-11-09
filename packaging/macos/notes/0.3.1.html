@@ -1,0 +1,8 @@
+<h3>What's new in Lectern 0.3.1</h3>
+<ul>
+  <li><b>Fixed: still seeing the old model list after updating.</b> After an update Lectern could keep talking to the previous version still running in the background, so the new models never showed up. It now waits for the old one to close, and only carries on once the new one is running.</li>
+  <li><b>Parakeet is always listed on Apple Silicon.</b> On a Mac with macOS 13 or older it shows greyed out as &ldquo;Needs macOS 14&rdquo; instead of being hidden.</li>
+  <li><b>A faster default model.</b> On Apple Silicon Macs, the recommended <b>Balanced</b> model now uses the Neural Engine. On an M4 it transcribed about <b>1.7&times; faster</b> than the model most of you have been using (large-v3 turbo q5), with the same accuracy (99.5% of words matched the full-size reference, against 99.3% for the old one). It is a bigger download (about 1.6 GB), and Lectern offers it with a banner; nothing changes until you accept.</li>
+  <li><b>Fastest (Parakeet) &mdash; beta.</b> An optional model for Apple Silicon Macs on macOS 14 or newer. On an M4, two real livestream recordings (112 and 326 minutes) ran about <b>16&ndash;18&times; faster</b> than the old model; the 112-minute one took 19 seconds instead of 5 minutes 23. About 555 MB. Choose it in Settings.</li>
+  <li>Speeds are measured on an M4 Mac. Other chips will differ.</li>
+</ul>
