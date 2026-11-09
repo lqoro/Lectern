@@ -294,6 +294,26 @@ def api_notice_accept():
     return jsonify({"accepted": True, "version": NOTICE_VERSION})
 
 
+@app.get("/api/whatsnew")
+def api_whatsnew():
+    """Whether to show this version's notes: once per version, never to a brand-new install."""
+    st = models.load_settings()
+    seen = st.get("seen_version")
+    if seen == config.VERSION:
+        return jsonify({"show": False, "version": config.VERSION})
+    if not seen and not st:   # first run on this computer: nothing to catch up on
+        models.save_settings(seen_version=config.VERSION)
+        return jsonify({"show": False, "version": config.VERSION})
+    has_notes = (WEB_DIR / "whatsnew" / f"{config.VERSION}.html").is_file()
+    return jsonify({"show": has_notes, "version": config.VERSION})
+
+
+@app.post("/api/whatsnew/seen")
+def api_whatsnew_seen():
+    models.save_settings(seen_version=config.VERSION)
+    return jsonify({"ok": True})
+
+
 def quick_title(now: datetime | None = None) -> str:
     """Auto title for a one-key recording: start date and time, e.g. "102626 2:05 PM"."""
     now = now or datetime.now()

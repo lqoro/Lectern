@@ -987,6 +987,25 @@ $("fTitle").addEventListener("input", () => {
   if ($("fFolder").value !== want) { $("fFolder").value = want; syncFolderUi(); }
 });
 
+/* ------------------------------------------------- what's new */
+// Shown once after an update. The notes are our own bundled HTML, parsed (not
+// run) and moved into the dialog; closing it, however it closes, marks them seen.
+async function maybeShowWhatsNew() {
+  try {
+    const w = await api("/api/whatsnew");
+    if (!w.show) return;
+    const res = await fetch(`/web/whatsnew/${encodeURIComponent(w.version)}.html`, { cache: "no-cache" });
+    if (!res.ok) return;
+    const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+    const dlg = $("whatsNewDlg");
+    $("wnBody").replaceChildren(...document.adoptNode(doc.body).childNodes);
+    const h = $("wnBody").querySelector("h3");
+    if (h) h.id = "wnTitle";
+    dlg.addEventListener("close", () => { jpost("/api/whatsnew/seen").catch(() => {}); }, { once: true });
+    dlg.showModal();
+  } catch { /* notes are a courtesy; never block the app */ }
+}
+
 /* ------------------------------------------------- first-run notice */
 // The recording-law notice is shown once (per notice version) before the
 // first recording or import. "Not now" closes it; Record/Import ask again.
@@ -1343,6 +1362,7 @@ requireNotice();                         // first launch: show the notice right 
   const m = location.hash.match(/^#\/l\/(.+)$/);
   if (m) { openLecture(decodeURIComponent(m[1])); loadLibrary(); } else showLibrary();
   poll();
+  maybeShowWhatsNew();
 })();
 
 /* ---------------------------------------------------------- settings */

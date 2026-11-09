@@ -1,7 +1,7 @@
 """Sign a Lectern disk image and write the Sparkle update feed for it.
 
     .venv/bin/python packaging/macos/make_appcast.py dist/Lectern-0.2.1.dmg \\
-        --notes packaging/macos/notes/0.2.1.html --out ~/lectern-site/appcast.xml
+        --notes web/whatsnew/0.2.1.html --out ~/lectern-site/appcast.xml
 
 The signature comes from the update-signing private key in this Mac's login
 keychain (made once with Sparkle's `generate_keys`; the matching public key is

@@ -70,7 +70,7 @@ refuse to open it until the next two steps are done.
 
    ```bash
    .venv/bin/python packaging/macos/make_appcast.py dist/Lectern-$VERSION.dmg \
-     --notes packaging/macos/notes/$VERSION.html --out ~/lectern-site/appcast.xml
+     --notes web/whatsnew/$VERSION.html --out ~/lectern-site/appcast.xml
    cd ~/lectern-site && git add appcast.xml && git commit -m "feat: update feed $VERSION" \
      && npx vercel deploy --prod --yes
    ```
