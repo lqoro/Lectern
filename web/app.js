@@ -1555,6 +1555,21 @@ async function fillModelBanner(kind) {
         `${label}, ${mbText(sys.recommended_size_mb)}.`;
     $("modelBannerGo").textContent = `Download ${label}`;
     $("modelBannerGo").classList.remove("hidden");
+    const pick = $("modelBannerPick");
+    pick.replaceChildren();
+    if (kind === "first") {                         // first launch: let them choose what to download
+      for (const m of sys.models.filter((x) => !x.installed && x.fits !== false)) {
+        const eta = m.min_per_hour ? `, about ${m.min_per_hour} min per hour of lecture` : "";
+        const opt = el("option", "", `${m.label.replace(/\s*\(default\)$/, "")}${m.beta ? " (beta)" : ""} - ${mbText(m.size_mb)}${eta}`);
+        opt.value = m.id;
+        opt.selected = m.id === sys.recommended;
+        pick.append(opt);
+      }
+      const sync = () => { $("modelBannerGo").textContent = "Download"; bannerRec = pick.value; };
+      pick.onchange = sync;
+      sync();
+    }
+    pick.classList.toggle("hidden", !pick.options.length);
   } catch { /* keep the generic text */ }
 }
 $("modelBannerGo").onclick = async () => {
