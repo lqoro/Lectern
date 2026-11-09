@@ -195,7 +195,7 @@ class Recommendation(Base):
     def test_recommendation_explains_itself_with_a_time_estimate(self):
         hw = self.hw()
         rec = self.models.recommend(hw)
-        self.assertEqual(rec.id, "large-v3-turbo-q5_0")
+        self.assertEqual(rec.id, "large-v3-turbo-q4_0")
         why = self.models.recommend_why(rec, hw)
         self.assertIn("Apple chip with 8 GB", why)
         self.assertIn(f"about {self.models.minutes_per_hour(rec, hw)} min", why)

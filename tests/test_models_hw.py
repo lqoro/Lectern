@@ -67,20 +67,24 @@ class Selection(unittest.TestCase):
     def test_recommendations(self):
         r = lambda ram, accel, cores: self.m.recommend(
             {"ram_total_mb": ram, "accelerator": accel, "cpu_cores": cores}).id
-        self.assertEqual(r(8192, "metal", 8), "large-v3-turbo-q5_0")
+        # Apple chip with 8 GB or more: the q4 model with the Neural Engine encoder.
+        self.assertEqual(r(8192, "metal", 8), "large-v3-turbo-q4_0")
         self.assertEqual(r(4096, "metal", 8), "small.en")
         self.assertEqual(r(16384, "cpu", 8), "large-v3-turbo-q5_0")
         self.assertEqual(r(8192, "cpu", 8), "small.en")
         self.assertEqual(r(8192, "cpu", 2), "base.en")
-        # Parakeet: Apple chip, macOS 14+, 8 GB or more. Older macOS cannot start its program.
-        p = lambda ram, accel, macos: self.m.recommend(
-            {"ram_total_mb": ram, "accelerator": accel, "cpu_cores": 8, "macos": macos}).id
-        self.assertEqual(p(8192, "metal", "14.0"), "parakeet-tdt-0.6b-v3-coreml")
-        self.assertEqual(p(16384, "metal", "26.1"), "parakeet-tdt-0.6b-v3-coreml")
-        self.assertEqual(p(8192, "metal", "13.6"), "large-v3-turbo-q5_0")
-        self.assertEqual(p(8192, "metal", ""), "large-v3-turbo-q5_0")
-        self.assertEqual(p(4096, "metal", "15.0"), "small.en")
-        self.assertEqual(p(16384, "cpu", "14.0"), "large-v3-turbo-q5_0")
+        # Parakeet is a beta opt-in: never recommended, only offered on Apple chips with macOS 14+.
+        pk = self.m.BY_ID["parakeet-tdt-0.6b-v3-coreml"]
+        self.assertTrue(pk.beta)
+        hw = lambda accel, macos: {"accelerator": accel, "macos": macos}
+        self.assertTrue(self.m.available(pk, hw("metal", "14.0")))
+        self.assertTrue(self.m.available(pk, hw("metal", "26.1")))
+        self.assertFalse(self.m.available(pk, hw("metal", "13.6")))
+        self.assertFalse(self.m.available(pk, hw("metal", "")))
+        self.assertFalse(self.m.available(pk, hw("cpu", "14.0")))
+        q4 = self.m.BY_ID["large-v3-turbo-q4_0"]
+        self.assertTrue(self.m.available(q4, hw("metal", "12.0")))
+        self.assertFalse(self.m.available(q4, hw("cpu", "14.0")))
         self.assertEqual(r(2048, "cpu", 2), "tiny.en")
 
     def test_windows_needs_twice_the_ram_of_a_mac(self):

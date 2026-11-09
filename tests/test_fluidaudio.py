@@ -127,16 +127,19 @@ class UpgradeOffer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             m = fresh_modules(tmp, LECTERN_MODEL_DIR=str(Path(tmp) / "models"))
             m.LEGACY_DIR = m.BENCH_DIR = Path(tmp) / "none"
-            pk = m.BY_ID["parakeet-tdt-0.6b-v3-coreml"]
-            m._recommended = lambda: pk
+            q4 = m.BY_ID["large-v3-turbo-q4_0"]
+            m._recommended = lambda: q4
             self.assertIsNone(m.upgrade_offer())                    # nothing installed: first-run banner instead
             fake_model(m, m.BY_ID["small.en"])
-            self.assertEqual(m.upgrade_offer(), pk.id)
-            (m.MODELS_DIR / pk.file).mkdir()
-            (m.MODELS_DIR / pk.file / "config.json").write_text("{}")
-            self.assertIsNone(m.upgrade_offer())                    # already has it
+            self.assertEqual(m.upgrade_offer(), q4.id)
+            (m.MODELS_DIR / q4.file).write_bytes(b"x")              # the file alone is not the bundle
+            self.assertEqual(m.upgrade_offer(), q4.id)
+            enc = m.MODELS_DIR / "ggml-large-v3-turbo-encoder.mlmodelc"
+            enc.mkdir()
+            (enc / "model.mil").write_text("x")
+            self.assertIsNone(m.upgrade_offer())                    # already has both parts
             m._recommended = lambda: m.BY_ID["large-v3-turbo-q5_0"]
-            (m.MODELS_DIR / pk.file / "config.json").unlink()
+            (enc / "model.mil").unlink()
             self.assertIsNone(m.upgrade_offer())                    # recommendation is an ordinary file
 
 
@@ -162,14 +165,14 @@ class DownloadsParakeet(unittest.TestCase):
         self.addCleanup(srv.shutdown)
         return f"http://127.0.0.1:{srv.server_port}"
 
-    def run_download(self, payload):
+    def run_download(self, payload, model_id="parakeet-tdt-0.6b-v3-coreml"):
         tmp = tempfile.mkdtemp()
         self.addCleanup(__import__("shutil").rmtree, tmp, True)
         m = fresh_modules(tmp, LECTERN_MODEL_BASE_URL=self.serve(payload),
                           LECTERN_MODEL_DIR=str(Path(tmp) / "models"))
         m.LEGACY_DIR = m.BENCH_DIR = Path(tmp) / "none"
-        pk = m.BY_ID["parakeet-tdt-0.6b-v3-coreml"] = dataclasses.replace(
-            m.BY_ID["parakeet-tdt-0.6b-v3-coreml"], size_mb=len(payload) / 1e6,
+        pk = m.BY_ID[model_id] = dataclasses.replace(
+            m.BY_ID[model_id], size_mb=len(payload) / 1e6,
             sha256=hashlib.sha256(payload).hexdigest())
         m.DOWNLOADER.start(pk.id)
         for _ in range(200):
@@ -195,6 +198,23 @@ class DownloadsParakeet(unittest.TestCase):
         self.assertIn("unsafe", m.DOWNLOADER.status()["error"])
         self.assertFalse((m.MODELS_DIR.parent / "evil.txt").exists())
         self.assertIsNone(m.installed_path(pk))
+
+    def test_q4_bundle_puts_the_file_and_encoder_side_by_side(self):
+        # whisper.cpp finds the encoder by name next to the model, so both must land at the top level.
+        enc = "ggml-large-v3-turbo-encoder.mlmodelc"
+        m, q4 = self.run_download(zip_bytes({"ggml-large-v3-turbo-q4_0.bin": "b" * 100,
+                                             f"{enc}/model.mil": "m", f"{enc}/weights/weight.bin": "w"},
+                                            folder=None), "large-v3-turbo-q4_0")
+        self.assertEqual(m.DOWNLOADER.status().get("error"), "")
+        self.assertEqual(m.installed_path(q4), m.MODELS_DIR / q4.file)
+        self.assertTrue((m.MODELS_DIR / enc / "weights" / "weight.bin").is_file())
+        self.assertEqual(sorted(p.name for p in m.MODELS_DIR.iterdir()), [enc, q4.file])
+
+    def test_q4_bundle_without_the_encoder_is_not_installed(self):
+        m, q4 = self.run_download(zip_bytes({"ggml-large-v3-turbo-q4_0.bin": "b" * 100}, folder=None),
+                                  "large-v3-turbo-q4_0")
+        self.assertIn("missing files", m.DOWNLOADER.status()["error"])
+        self.assertIsNone(m.installed_path(q4))
 
 
 if __name__ == "__main__":

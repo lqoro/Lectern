@@ -1371,6 +1371,7 @@ async function loadSettings() {
     const main = el("div", "m-main");
     const name = el("div", "m-name", m.label);
     if (m.recommended) name.append(el("span", "tag", "recommended"));
+    if (m.beta) name.append(el("span", "tag", "beta"));
     if (m.id === s.active.id) name.append(el("span", "tag", "in use"));
     if (!m.fits) name.append(el("span", "tag", "may be too heavy here"));
     const eta = m.min_per_hour ? ` About ${m.min_per_hour} min per hour of lecture here.` : "";
@@ -1548,7 +1549,7 @@ async function fillModelBanner(kind) {
     const what = dev.name ? `this ${dev.name}${specs ? ` (${specs})` : ""}` : "this computer";
     const label = sys.recommended_label.replace(/\s*\(default\)$/, "");
     $("modelBannerText").textContent = kind === "upgrade"
-      ? `A much faster speech model is available for ${what}: ${label}, ${mbText(sys.recommended_size_mb)}. ` +
+      ? `A faster speech model is available for ${what}: ${label}, ${mbText(sys.recommended_size_mb)}. ` +
         `Your current model keeps working until it finishes downloading.`
       : `Before your first lecture, download a speech model. Recommended for ${what}: ` +
         `${label}, ${mbText(sys.recommended_size_mb)}.`;

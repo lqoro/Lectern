@@ -168,10 +168,11 @@ def build_whisper() -> Path:
              f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MIN_MACOS}",
              "-DBUILD_SHARED_LIBS=OFF", "-DGGML_NATIVE=OFF",
              "-DGGML_METAL=ON", "-DGGML_METAL_EMBED_LIBRARY=ON",
+             "-DWHISPER_COREML=1", "-DWHISPER_COREML_ALLOW_FALLBACK=1",
              "-DWHISPER_BUILD_TESTS=OFF", "-DWHISPER_BUILD_SERVER=OFF"]
     if cached(out, [WHISPER_TAG, COMMITS.get(WHISPER_TAG), *flags]):
         return out
-    say(f"Building whisper.cpp {WHISPER_TAG} (Metal, static, portable CPU flags)")
+    say(f"Building whisper.cpp {WHISPER_TAG} (Metal + CoreML encoder, static, portable CPU flags)")
     src = clone("https://github.com/ggml-org/whisper.cpp.git", WHISPER_TAG,
                 BUILD / "src" / f"whisper.cpp-{WHISPER_TAG}")
     bdir = src / "build-lectern"
