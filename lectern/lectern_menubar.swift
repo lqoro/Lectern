@@ -74,7 +74,6 @@ func request(_ path: String, method: String = "GET", body: [String: Any]? = nil,
     }.resume()
 }
 
-/// Start the Lectern server if nothing answers, then call `then(ok)`.
 func listeningPIDs() -> [Int32] {
     let find = Process()
     find.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
@@ -99,55 +98,88 @@ func stopStaleServer() {
     for _ in 0..<20 where !listeningPIDs().isEmpty { Thread.sleep(forTimeInterval: 0.1) }
 }
 
+// How long to wait for a freshly started server: 300 polls 0.1 s apart is about 30 s
+// (the first start builds the mic helper, so be patient), but the window is already
+// open the whole time and a ready server is noticed within a tenth of a second.
+let readyPollInterval: TimeInterval = 0.1
+let readyPollTries = 300
+
+// Callers waiting for the one ensureServer run in progress. Opening the window, the
+// Dock icon and a menu item can all ask while the server is still starting; each must
+// share that run, not start a second server.
+var ensureWaiters: [(Bool) -> Void] = []
+
+/// Start the Lectern server if nothing answers, then call `then(ok)` on the main thread.
 func ensureServer(_ then: @escaping (Bool) -> Void) {
+    ensureWaiters.append(then)
+    guard ensureWaiters.count == 1 else { return }
+    ensureServerOnce { ok in
+        let waiters = ensureWaiters
+        ensureWaiters = []
+        for w in waiters { w(ok) }
+    }
+}
+
+private func ensureServerOnce(_ then: @escaping (Bool) -> Void) {
     let mine = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     request("api/status", timeout: 1.5) { json, code in
         if code == 200 {
             let stale = isBundled && json?["version"] as? String != mine
             if !stale || json?["recording"] as? Bool == true { return then(true) }
-            stopStaleServer()
-        }
-        guard !bundledServerMissing else { return then(false) }
-        let logs = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Lectern/logs")
-        try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
-        let logURL = logs.appendingPathComponent("server.out")
-        if !FileManager.default.fileExists(atPath: logURL.path) {
-            FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        }
-        let p = Process()
-        if isBundled {
-            p.executableURL = bundledServer
-            p.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-            var env = ProcessInfo.processInfo.environment
-            env["LECTERN_BIN_DIR"] = bundledBin.path
-            env["LECTERN_PORT"] = String(port)
-            p.environment = env
-        } else {
-            p.executableURL = URL(fileURLWithPath: repo).appendingPathComponent(".venv/bin/python")
-            p.arguments = ["-m", "lectern"]
-            p.currentDirectoryURL = URL(fileURLWithPath: repo)
-        }
-        if let log = try? FileHandle(forWritingTo: logURL) {
-            log.seekToEndOfFile()
-            p.standardOutput = log
-            p.standardError = log
-        }
-        do { try p.run() } catch { return then(false) }
-        serverProcess = p
-        // Wait for it to answer (first start builds the mic helper: be patient).
-        var tries = 0
-        func check() {
-            request("api/status", timeout: 1) { json, code in
-                // Only our own version counts as up; an old server still shutting down must not.
-                if code == 200 && (!isBundled || json?["version"] as? String == mine) { return then(true) }
-                tries += 1
-                if tries > 60 { return then(false) }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: check)
+            // lsof and the waits for the old server to exit take a second or more:
+            // do them off the main thread, and start the new server only afterwards.
+            DispatchQueue.global(qos: .userInitiated).async {
+                stopStaleServer()
+                DispatchQueue.main.async { startServer(mine: mine, then) }
             }
+            return
         }
-        check()
+        startServer(mine: mine, then)
     }
+}
+
+/// Launch our own server and wait until it answers. Runs on the main thread.
+private func startServer(mine: String?, _ then: @escaping (Bool) -> Void) {
+    guard !bundledServerMissing else { return then(false) }
+    let logs = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Lectern/logs")
+    try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+    let logURL = logs.appendingPathComponent("server.out")
+    if !FileManager.default.fileExists(atPath: logURL.path) {
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+    }
+    let p = Process()
+    if isBundled {
+        p.executableURL = bundledServer
+        p.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        var env = ProcessInfo.processInfo.environment
+        env["LECTERN_BIN_DIR"] = bundledBin.path
+        env["LECTERN_PORT"] = String(port)
+        p.environment = env
+    } else {
+        p.executableURL = URL(fileURLWithPath: repo).appendingPathComponent(".venv/bin/python")
+        p.arguments = ["-m", "lectern"]
+        p.currentDirectoryURL = URL(fileURLWithPath: repo)
+    }
+    if let log = try? FileHandle(forWritingTo: logURL) {
+        log.seekToEndOfFile()
+        p.standardOutput = log
+        p.standardError = log
+    }
+    do { try p.run() } catch { return then(false) }
+    serverProcess = p
+    var tries = 0
+    func check() {
+        request("api/status", timeout: 1) { json, code in
+            // Only our own version counts as up; an old server still shutting down must not.
+            if code == 200 && (!isBundled || json?["version"] as? String == mine) { return then(true) }
+            tries += 1
+            // A server that already exited will never answer: say so now, not after 30 s.
+            if tries > readyPollTries || !p.isRunning { return then(false) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + readyPollInterval, execute: check)
+        }
+    }
+    check()
 }
 
 // -------------------------------------------------------------------- hotkey
@@ -270,6 +302,59 @@ final class NativeBridge: NSObject, WKScriptMessageHandlerWithReply {
 final class MainWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let window: NSWindow
     let web: WKWebView
+    /// True once the real UI has been asked for; until then the window shows a
+    /// small built-in page (see `placeholderHTML`).
+    private(set) var appLoaded = false
+    /// A "#settings"-style request that arrived before the UI had loaded.
+    private var pendingHash: String?
+
+    /// The page shown while the server starts, and if it cannot. Inline, so it
+    /// needs no server; colours and type follow the web UI (app.css) in light and dark.
+    static func placeholderHTML(title: String, detail: String, failed: Bool) -> String {
+        let spinner = failed ? "" : "<div class=\"spin\" role=\"progressbar\" aria-label=\"Starting\"></div>"
+        return """
+        <!doctype html><meta charset="utf-8">
+        <meta name="color-scheme" content="light dark">
+        <style>
+        :root{--ground:#f2f4f7;--ink:#0a0a0a;--muted:#5f636b;--line:#d2d6dc;--accent:#3b6ef5;--danger:#c4242a}
+        @media (prefers-color-scheme:dark){:root{--ground:#111214;--ink:#f3f3f4;--muted:#a7aab1;--line:#3d4046;--accent:#6d9bff;--danger:#ff7a6e}}
+        html,body{height:100%;margin:0}
+        body{background:var(--ground);color:var(--ink);display:flex;align-items:center;justify-content:center;
+          font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+          -webkit-user-select:none;cursor:default}
+        main{text-align:center;max-width:420px;padding:0 24px}
+        h1{font-size:17px;font-weight:600;margin:0 0 6px;color:\(failed ? "var(--danger)" : "var(--ink)")}
+        p{margin:0;color:var(--muted)}
+        .spin{width:22px;height:22px;margin:0 auto 18px;border:2px solid var(--line);border-top-color:var(--accent);
+          border-radius:50%;animation:r .8s linear infinite}
+        @keyframes r{to{transform:rotate(360deg)}}
+        @media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
+        </style>
+        <main>\(spinner)<h1>\(title)</h1><p>\(detail)</p></main>
+        """
+    }
+
+    func showStarting() {
+        web.loadHTMLString(Self.placeholderHTML(title: "Starting Lectern", detail: "One moment.", failed: false), baseURL: nil)
+    }
+
+    /// The server did not come up: say so in the window instead of leaving it blank.
+    func showError() {
+        appLoaded = false
+        pendingHash = nil
+        web.loadHTMLString(Self.placeholderHTML(
+            title: "Lectern could not start",
+            detail: "Its server did not respond. Quit Lectern and open it again. If this keeps happening, "
+                + "the log is at ~/Library/Application Support/Lectern/logs/server.out.",
+            failed: true), baseURL: nil)
+    }
+
+    /// The server answers: show the real UI (once; a second call while it is showing is a no-op).
+    func loadApp() {
+        guard !appLoaded else { return }
+        appLoaded = true
+        web.load(URLRequest(url: base))
+    }
 
     override init() {
         let cfg = WKWebViewConfiguration()
@@ -290,15 +375,25 @@ final class MainWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDe
         window.delegate = self
         window.setFrameAutosaveName("LecternMain")
         if window.frame.origin == .zero { window.center() }
-        web.load(URLRequest(url: base))
+        showStarting()
     }
 
     func show(hash: String? = nil) {
-        if let hash {
-            web.evaluateJavaScript("location.hash = \(String(reflecting: hash)); if (\(String(reflecting: hash)) === '#settings') document.getElementById('settingsBtn').click();")
-        }
+        if let hash { open(hash: hash) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func open(hash: String) {
+        // Before the UI has loaded there is nothing to click; remember it for didFinish.
+        guard appLoaded, web.url?.host == "127.0.0.1" else { pendingHash = hash; return }
+        web.evaluateJavaScript("location.hash = \(String(reflecting: hash)); if (\(String(reflecting: hash)) === '#settings') document.getElementById('settingsBtn').click();")
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let hash = pendingHash, webView.url?.host == "127.0.0.1" else { return }
+        pendingHash = nil
+        open(hash: hash)
     }
 
     func isLocal(_ url: URL?) -> Bool {
@@ -381,7 +476,9 @@ final class MainWindow: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDe
     // If the server restarts under us, reload once it answers again.
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
-        ensureServer { ok in if ok { webView.load(URLRequest(url: base)) } }
+        ensureServer { ok in
+            if ok { webView.load(URLRequest(url: base)) } else { self.showError() }
+        }
     }
 }
 
@@ -447,12 +544,14 @@ final class Controller: NSObject, NSMenuDelegate {
         render()
         onHotKey = { [weak self] in self?.toggle() }
         installHotKeyHandler()
+        // Opening Lectern.app should open Lectern, not just a menu bar icon: show the
+        // window now (with a loading state) and fill it in when the server answers.
+        if isBundled { openLecternUI() }
         ensureServer { [weak self] ok in
             self?.online = ok
             self?.refreshShortcut()
             self?.poll()
-            // Opening Lectern.app should open Lectern, not just a menu bar icon.
-            if ok && isBundled { openLecternUI() }
+            if isBundled { finishLoading(ok) }
         }
         Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
             self?.refreshShortcut()
@@ -537,11 +636,11 @@ final class Controller: NSObject, NSMenuDelegate {
     }
 
     @objc func openApp() {
-        ensureServer { _ in openLecternUI() }
+        openLecternUIWhenReady()
     }
 
     @objc func openShortcutSettings() {
-        ensureServer { _ in openLecternUI(hash: "#settings") }
+        openLecternUIWhenReady(hash: "#settings")
     }
 
     @objc func quit() { NSApp.terminate(nil) }
@@ -601,6 +700,20 @@ func openLecternUI(hash: String? = nil) {
     mainWindow?.show(hash: hash)
 }
 
+/// The bundled window has its real content (or an error) once the server is known.
+func finishLoading(_ ok: Bool) {
+    if ok { mainWindow?.loadApp() } else { mainWindow?.showError() }
+}
+
+/// Open Lectern now. The bundled app shows its window straight away and fills it in
+/// when the server answers; the developer helper opens the browser once it does.
+func openLecternUIWhenReady(hash: String? = nil) {
+    guard isBundled else { return ensureServer { _ in openLecternUI(hash: hash) } }
+    openLecternUI(hash: hash)
+    if mainWindow?.appLoaded == false { mainWindow?.showStarting() }   // after an error, try again
+    ensureServer { ok in finishLoading(ok) }
+}
+
 /// Clicking the Dock icon (or opening Lectern.app again) brings the window back.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -620,7 +733,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if isBundled { ensureServer { _ in openLecternUI() } }
+        if isBundled { openLecternUIWhenReady() }
         return false
     }
 }
