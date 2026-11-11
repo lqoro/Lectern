@@ -487,6 +487,43 @@ async function fetchPart(id, part, what) {
   }
 }
 
+// The live draft: same shape as the transcript plus draft/complete/live.
+const DRAFT_POLL_MS = 5000;
+const sameDraft = (a, b) => !!b.draft && a.words.w.length === b.words.w.length
+  && a.duration_ms === b.duration_ms && a.complete === b.complete;
+
+function showDraftNote(d) {
+  const n = $("draftNote");
+  if (!R.doc || !R.doc.draft) { n.classList.add("hidden"); return; }
+  n.textContent = d.state === "recording"
+    ? "Live draft — it grows about once a minute while you record."
+    : d.state === "paused"
+      ? "Draft so far. The full-quality transcript is made when you finish."
+      : d.state === "failed"
+        ? "Draft only — the full transcription did not finish. Use Process now to try again."
+        : "Draft — the full-quality transcript is being made and will replace this by itself.";
+  n.classList.remove("hidden");
+}
+
+// Swap the transcript in place (draft -> longer draft, or draft -> final),
+// keeping the sentence at the top of the pane where it was.
+function swapTranscript(doc) {
+  const pane = $("transcript").closest(".pane");
+  const top = pane.getBoundingClientRect().top;
+  let anchorMs = null, offset = 0;
+  for (const el of R.els) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom > top) { anchorMs = R.doc.sents[+el.dataset.si].t0; offset = r.top - top; break; }
+  }
+  const atTop = pane.scrollTop === 0;
+  buildIndex(doc); renderTranscript(doc); drawTape();
+  if (anchorMs !== null && !atTop && R.els.length) {
+    const si = Math.max(0, sentOfWord(wordAt(anchorMs)));
+    pane.scrollTop += R.els[si].getBoundingClientRect().top - top - offset;
+  }
+  if (!audio.paused || audio.currentTime) paint(audio.currentTime * 1000);
+}
+
 let jobTimer = 0;
 async function refreshLecture(first) {
   if (!R.id) return;
@@ -495,7 +532,8 @@ async function refreshLecture(first) {
   // library list (if loaded) says which of transcript/notes exist, so those
   // start now instead of after the lecture record comes back.
   const hint = first ? L.lectures.find((x) => x.id === id) : null;
-  let tP = first && (!hint || hint.has_transcript) ? fetchPart(id, "transcript", "transcript") : null;
+  let tP = first && (!hint || hint.has_transcript || hint.has_draft)
+    ? fetchPart(id, "transcript", "transcript") : null;
   let nP = first && (!hint || hint.has_notes) ? fetchPart(id, "notes", "notes") : null;
   const foldersP = L.folders.length ? null : refreshFolders();
   let d;
@@ -517,13 +555,22 @@ async function refreshLecture(first) {
   const job = d.job;
 
   // Transcript: render the moment it arrives, independent of notes/class row.
-  if (!tP && d.has_transcript && !R.doc) tP = fetchPart(id, "transcript", "transcript");
+  // A live draft (written while recording) is shown until the real transcript
+  // exists, and refetched on every refresh until then: the request is
+  // conditional, so an unchanged draft costs a 304.
+  if (!tP && (d.has_transcript || d.has_draft) && (!R.doc || R.doc.draft)) {
+    tP = fetchPart(id, "transcript", "transcript");
+  }
   const tDone = tP && tP.then((doc) => {
-    if (!doc || R.id !== id || !(first || !R.doc)) return;
-    buildIndex(doc); renderTranscript(doc); drawTape();
+    if (!doc || R.id !== id) return;
+    if (R.doc && !R.doc.draft) return;               // the final one is never replaced
+    if (R.doc && sameDraft(R.doc, doc)) return;
+    if (R.doc) swapTranscript(doc);
+    else { buildIndex(doc); renderTranscript(doc); drawTape(); }
     $("durTime").textContent = fmt(doc.duration_ms / 1000);
-  });
-  if (!d.has_transcript && !job && !R.doc) {
+  }).then(() => showDraftNote(d));
+  if (!tP) showDraftNote(d);
+  if (!d.has_transcript && !d.has_draft && !job && !R.doc) {
     $("transcript").innerHTML =
       `<p class="muted">No transcript yet. <button id="reproc" class="ghost">Process now</button></p>`;
     const b = $("reproc");
@@ -603,6 +650,9 @@ async function refreshLecture(first) {
     $("jobHint").textContent = job.error;
   } else {
     box.classList.add("hidden");
+  }
+  if (!running && d.state === "recording") {
+    jobTimer = setTimeout(() => refreshLecture(false), DRAFT_POLL_MS);   // the live draft grows
   }
 
   if (d.has_audio) {
@@ -1517,7 +1567,24 @@ async function loadUpdates() {
 $("updAuto").onchange = async (e) => showUpdates(await native({ cmd: "auto", on: e.target.checked }));
 $("updNow").onclick = async () => { await native({ cmd: "check" }); setTimeout(loadUpdates, 4000); };
 
-$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadStorage(); loadUpdates(); };
+$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadLive(); loadStorage(); loadUpdates(); };
+
+/* ----------------------------------------------- transcribe while recording */
+function showLive(s) {
+  $("liveEnabled").checked = !!s.enabled;
+  $("liveHint").textContent = s.default
+    ? "On by default on this computer."
+    : "Off by default on this computer (less than 12 GB of memory), so recording and transcribing never compete for it.";
+}
+async function loadLive() {
+  try { showLive(await api("/api/settings/live")); } catch { /* leave the checkbox as it is */ }
+}
+$("liveEnabled").onchange = async (e) => {
+  try {
+    showLive(await jpost("/api/settings/live", { enabled: e.target.checked }));
+    toast(e.target.checked ? "Transcribe while recording: on (from the next recording)." : "Transcribe while recording: off.");
+  } catch (err) { toast(err.message || "Could not save the setting."); loadLive(); }
+};
 
 /* ------------------------------------------------------------ storage */
 

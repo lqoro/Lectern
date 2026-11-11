@@ -34,7 +34,7 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from . import archive, concat, config, hardware, importer, models, notes, storage, transcribe
+from . import archive, concat, config, hardware, importer, live, models, notes, storage, transcribe
 from .storage import Lecture
 
 class FifoLock:
@@ -62,6 +62,11 @@ class FifoLock:
         with self._cv:
             self._serving += 1
             self._cv.notify_all()
+
+    def busy(self) -> bool:
+        """Held, or waited for. Never blocks (live.py polls it)."""
+        with self._cv:
+            return self._next != self._serving
 
 
 # Audio stages (at most one transcription at a time).
@@ -205,6 +210,11 @@ class Pipeline:
             return
 
         try:
+            if not extract:
+                # Let the live draft take in the last segment (bounded; it
+                # never takes STAGE_LOCK, so it must run before we queue).
+                self._set(job, "waiting", 0, "finishing the live transcript")
+                live.LIVE.finish(job.lecture_id)
             self._set(job, "waiting", 0, "waiting for a free processing slot")
             with STAGE_LOCK:
                 if extract:
@@ -300,6 +310,7 @@ class Pipeline:
             self._set(job, "transcribing", 10 + int(p * 0.55),
                       f"transcribing… {p}%")
 
+        live.LIVE.wait_idle()      # never two engines at once (bounded)
         t0 = time.time()
         raw, model_id = transcribe.run_with_fallback(lec.master_wav, lec.work / "whisper.raw",
                                                      progress_cb=on_pct)
@@ -310,6 +321,7 @@ class Pipeline:
         storage.atomic_write_json(lec.transcript_path, doc)
         storage.atomic_write_text(lec.transcript_txt_path,
                                   transcribe.to_plain_text(doc))
+        live.discard(lec)          # the real transcript replaces the draft
         lec.update(transcript={
             "file": "transcript.json",
             "words": len(doc["words"]["w"]),

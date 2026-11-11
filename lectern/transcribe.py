@@ -56,7 +56,11 @@ class TranscriptionError(RuntimeError):
     pass
 
 
-def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | None = None) -> Path:
+def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | None = None,
+                threads: int | None = None, proc_cb=None) -> Path:
+    """threads: whisper-cli threads (default hardware.whisper_threads()).
+    proc_cb: called with the engine's Popen once it runs, so a caller (the live
+    draft) can kill it without waiting for it."""
     model = model or models.active_path()
     if model is None:
         raise TranscriptionError(
@@ -79,7 +83,7 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | 
             "-f", str(wav),
             "-ojf",
             "-of", str(out_prefix),
-            "-t", str(hardware.whisper_threads()),
+            "-t", str(threads or hardware.whisper_threads()),
             "-bs", str(config.WHISPER_BEAM),
             "-l", config.WHISPER_LANG,
             "-mc", "0",
@@ -99,6 +103,11 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | 
     except FileNotFoundError:
         raise TranscriptionError(
             f"{name} is not installed (for whisper-cli on a Mac: brew install whisper-cpp)") from None
+    if proc_cb:
+        try:
+            proc_cb(proc)
+        except Exception:
+            log.exception("proc_cb failed")
     # A hung whisper (GPU stall) holds the stage lock and would block every
     # later lecture forever, so it gets a generous deadline and is killed.
     deadline_s = _whisper_deadline_s(wav)

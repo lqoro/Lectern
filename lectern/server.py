@@ -17,7 +17,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
-from . import audio, config, importer, models, storage, usage
+from . import audio, config, importer, live, models, storage, usage
 from .pipeline import PIPELINE
 from .recorder import RECORDER, RecorderBusy
 from .storage import Lecture
@@ -359,6 +359,21 @@ _SHORTCUT_MODS = ("cmd", "ctrl", "opt", "shift")
 DEFAULT_SHORTCUT = {"enabled": True, "key": "L", "mods": ["cmd"]}
 
 
+@app.get("/api/settings/live")
+def api_live_get():
+    """Transcribe while recording: on/off, and the automatic default."""
+    return jsonify(live.describe())
+
+
+@app.post("/api/settings/live")
+def api_live_set():
+    on = _json_body().get("enabled")
+    if not isinstance(on, bool):
+        return jsonify({"error": "enabled must be true or false"}), 400
+    live.set_enabled(on)
+    return jsonify(live.describe())
+
+
 @app.get("/api/shortcut")
 def api_shortcut_get():
     """The global start/stop key, read by the menu bar helper."""
@@ -491,11 +506,17 @@ def api_lecture(lecture_id: str):
 
 @app.get("/api/lecture/<lecture_id>/transcript")
 def api_transcript(lecture_id: str):
+    """The transcript; until it exists, the live draft (same shape, plus
+    "draft": true) if there is one. Conditional, so polling a draft that has
+    not changed costs a 304."""
     lec = _load(lecture_id)
-    if not lec.transcript_path.is_file():
-        return jsonify({"error": "no transcript yet"}), 404
-    return send_file(lec.transcript_path, mimetype="application/json",
-                     conditional=True, max_age=0)
+    for path in (lec.transcript_path, lec.draft_path):
+        try:
+            return send_file(path, mimetype="application/json",
+                             conditional=True, max_age=0)
+        except FileNotFoundError:
+            continue           # the draft is removed once the transcript lands
+    return jsonify({"error": "no transcript yet"}), 404
 
 
 @app.get("/api/lecture/<lecture_id>/notes")
@@ -540,7 +561,8 @@ def api_delete(lecture_id: str):
         if RECORDER.current_lecture_id() == lecture_id:
             return jsonify({"error": "this lecture is currently recording — "
                                      "stop or pause it first"}), 409
-        if PIPELINE.is_running(lecture_id) or lec.manifest().get("state") == "importing":
+        if (PIPELINE.is_running(lecture_id) or live.LIVE.busy(lecture_id)
+                or lec.manifest().get("state") == "importing"):
             return jsonify({"error": "this lecture is still processing — "
                                      "wait for it to finish first"}), 409
         try:
@@ -712,6 +734,7 @@ def _busy(lecture_id: str) -> bool:
     pipeline being queued)."""
     if (RECORDER.current_lecture_id() == lecture_id
             or PIPELINE.is_running(lecture_id)
+            or live.LIVE.busy(lecture_id)        # the draft of a just-paused lecture
             or not _STARTUP_DONE.is_set()):
         return True
     try:

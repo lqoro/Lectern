@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import audio, capture, config, storage
+from . import audio, capture, config, live, storage
 from . import pcm
 from . import platform_compat as pc
 from .storage import Lecture
@@ -302,6 +302,7 @@ class Recorder:
         self._pump.start()
         self._guard = threading.Thread(target=self._watch, daemon=True)
         self._guard.start()
+        _live_begin(lec.id)
         return self.status()
 
     @staticmethod
@@ -704,6 +705,12 @@ class Recorder:
         return 1
 
     def _finish_locked(self, reason: str) -> None:
+        if self._state is not None:
+            try:
+                # Memory only: marks the last segment final for the live draft.
+                live.LIVE.capture_ended(self._state.lecture_id)
+            except Exception:
+                log.exception("could not notify the live transcriber")
         if self._caffeinate is not None:
             try:
                 self._caffeinate.terminate()
@@ -739,6 +746,7 @@ class Recorder:
                 self._state.last_progress = time.monotonic()
                 self._guard = threading.Thread(target=self._watch_adopted, daemon=True)
                 self._guard.start()
+                _live_begin(lec.id)
                 return lec.id
         return None
 
@@ -763,6 +771,15 @@ class Recorder:
 
 
 # ------------------------------------------------------------- helpers
+def _live_begin(lecture_id: str) -> None:
+    """Start the live draft for a writer that just started. Memory only (the
+    worker does all file work), and a failure never affects the recording."""
+    try:
+        live.LIVE.begin(lecture_id)
+    except Exception:
+        log.exception("could not start the live transcriber")
+
+
 def self_pause_reason(lec: Lecture, log_offset: int | None = None) -> str | None:
     """REASON_LID / REASON_SLEEP if the lecture's most recent writer stopped
     itself cleanly for the lid or sleep, else None. Reads only what that

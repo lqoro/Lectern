@@ -153,6 +153,12 @@ class Lecture:
         return self.path / "transcript.txt"
 
     @property
+    def draft_path(self) -> Path:
+        """The live draft (live.py). Never the transcript: it only stands in
+        for transcript.json until that exists."""
+        return self.work / "draft.json"
+
+    @property
     def notes_path(self) -> Path:
         return self.path / "notes.md"
 
@@ -382,6 +388,7 @@ class Lecture:
         m = self.manifest()
         audio = m.get("audio", {}) or {}
         pl = self.playable_path()
+        has_transcript = self.transcript_path.is_file()
         return {
             "id": self.id,
             "title": m.get("title") or self.id,
@@ -396,7 +403,8 @@ class Lecture:
             "paused_utc": m.get("paused_utc") if m.get("state") == "paused" else None,
             "duration_ms": int(audio.get("duration_ms") or 0),
             "has_audio": pl is not None,
-            "has_transcript": self.transcript_path.is_file(),
+            "has_transcript": has_transcript,
+            "has_draft": not has_transcript and self.draft_path.is_file(),
             "has_notes": self.notes_path.is_file(),
             "words": (m.get("transcript", {}) or {}).get("words") or 0,
             "bytes": (pl.stat().st_size if pl else 0),

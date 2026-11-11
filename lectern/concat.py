@@ -21,6 +21,42 @@ _BLOCK = 1 << 20
 _WAV_HEADER_BYTES = 44   # every writer here (Swift, Python, ffmpeg bitexact, wave) emits this
 
 
+def _stream_segment(seg: Path, out) -> tuple[int, str | None]:
+    """Copy one segment's PCM into `out` (None: only count it). Returns
+    (frames, error). This is the single definition of how many frames a
+    segment contributes to master.wav, so anything that needs a position on
+    the master timeline (live.py) counts with it too."""
+    frames = 0
+    try:
+        with wave.open(str(seg)) as w:
+            if (w.getnchannels() != config.CHANNELS
+                    or w.getsampwidth() != config.SAMPLE_WIDTH):
+                return 0, "format mismatch"
+            while True:
+                # readframes() returns only frames that truly exist,
+                # even when the header lies about the count.
+                chunk = w.readframes(_BLOCK // config.SAMPLE_WIDTH)
+                if not chunk:
+                    break
+                if out is not None:
+                    out.writeframes(chunk)
+                frames += len(chunk) // config.SAMPLE_WIDTH
+    except (wave.Error, EOFError, OSError) as e:
+        return frames, str(e)
+    return frames, None
+
+
+def copy_segment(seg: Path, dest: Path) -> int:
+    """One segment as a standalone WAV with a correct header; returns the
+    frames it holds on the master timeline (exactly what concat counts)."""
+    with wave.open(str(dest), "wb") as out:
+        out.setnchannels(config.CHANNELS)
+        out.setsampwidth(config.SAMPLE_WIDTH)
+        out.setframerate(config.SAMPLE_RATE)
+        frames, _err = _stream_segment(seg, out)
+    return frames
+
+
 def concat_segments(segments: list[Path], dest: Path) -> dict:
     """Write `dest` from `segments`; return a manifest with true frame counts."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -33,28 +69,11 @@ def concat_segments(segments: list[Path], dest: Path) -> dict:
         out.setsampwidth(config.SAMPLE_WIDTH)
         out.setframerate(config.SAMPLE_RATE)
         for seg in segments:
-            frames = 0
-            try:
-                with wave.open(str(seg)) as w:
-                    if (w.getnchannels() != config.CHANNELS
-                            or w.getsampwidth() != config.SAMPLE_WIDTH):
-                        per_segment.append({"file": seg.name, "frames": 0,
-                                            "error": "format mismatch"})
-                        continue
-                    while True:
-                        # readframes() returns only frames that truly exist,
-                        # even when the header lies about the count.
-                        chunk = w.readframes(_BLOCK // config.SAMPLE_WIDTH)
-                        if not chunk:
-                            break
-                        out.writeframes(chunk)
-                        frames += len(chunk) // config.SAMPLE_WIDTH
-            except (wave.Error, EOFError, OSError) as e:
-                per_segment.append({"file": seg.name, "frames": frames,
-                                    "error": str(e)})
-                total += frames
-                continue
-            per_segment.append({"file": seg.name, "frames": frames})
+            frames, err = _stream_segment(seg, out)
+            entry = {"file": seg.name, "frames": frames}
+            if err:
+                entry["error"] = err
+            per_segment.append(entry)
             total += frames
 
     part.replace(dest)

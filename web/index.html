@@ -135,6 +135,7 @@
           <button id="jumpNow" class="tiny hidden" title="Scroll back to what is playing and follow along">Jump to current</button>
           <label class="follow"><input type="checkbox" id="followChk" role="switch" checked> Follow audio</label>
         </div>
+        <p id="draftNote" class="draft-note hidden" role="status"></p>
         <div id="transcript" class="transcript"></div>
       </div>
     </div>
@@ -240,6 +241,14 @@
         </div>
         <p class="hint" id="scHint"></p>
         <p class="hint" id="scHelper">Needs the menu bar helper (<code>./install.sh --menubar</code>).</p>
+      </div>
+    </section>
+    <section class="set-sec">
+      <div class="set-label"><h4>Transcribe while recording</h4>
+        <p>Turns each finished minute into text during the lecture, so a readable draft is there the moment you press Stop. The full-quality transcript still replaces it afterwards.</p></div>
+      <div>
+        <label class="check"><input type="checkbox" id="liveEnabled"> Enabled</label>
+        <p class="hint" id="liveHint"></p>
       </div>
     </section>
     <section class="set-sec hidden" id="updatesSec">
