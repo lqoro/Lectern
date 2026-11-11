@@ -54,7 +54,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import concat, config, hardware, models, storage, transcribe
+from . import concat, config, hardware, models, storage, transcribe, warmup
 from .storage import Lecture
 
 log = logging.getLogger(__name__)
@@ -238,6 +238,13 @@ class LiveTranscriber:
         s.done.set()
         self._wake.set()          # let an idle worker notice and exit now
 
+    def busy_any(self) -> bool:
+        """A live engine is running, or some recording's draft still has work
+        (the engine warm-up stays out of the way of both)."""
+        with self._lock:
+            return (not self._idle.is_set()
+                    or any(not s.done.is_set() for s in self._sessions.values()))
+
     def wait_idle(self, timeout: float | None = None) -> None:
         """Before a full transcription starts its engine: no live engine may
         run beside it. Waits at most `timeout`, then kills the live job (its
@@ -343,6 +350,7 @@ class LiveTranscriber:
             self._current = s
         self._idle.clear()
         try:
+            warmup.WARMER.preempt()    # after _idle.clear(): a warm-up cannot start beside us
             size = seg.stat().st_size
             # A clean copy: the exact frames concat will count, with a correct
             # header even if the writer died mid-segment.

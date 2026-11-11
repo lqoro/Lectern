@@ -637,8 +637,11 @@ async function refreshLecture(first) {
   if (running) {
     box.classList.remove("hidden");
     $("jobStage").textContent = job.message || job.stage;
-    $("jobPct").textContent = job.percent ? `${job.percent}%` : "";
-    $("jobFill").style.width = `${job.percent || 0}%`;
+    // Parakeet reports no progress while it runs: a moving bar, not a stuck number.
+    const indet = !!job.indeterminate;
+    $("jobFill").parentElement.classList.toggle("indeterminate", indet);
+    $("jobPct").textContent = !indet && job.percent ? `${job.percent}%` : "";
+    $("jobFill").style.width = indet ? "" : `${job.percent || 0}%`;
     $("jobHint").textContent =
       "This runs in the background on this computer. You can leave this page.";
     jobTimer = setTimeout(() => refreshLecture(false), 1200);
@@ -646,6 +649,7 @@ async function refreshLecture(first) {
     box.classList.remove("hidden");
     $("jobStage").textContent = "Processing failed";
     $("jobPct").textContent = "";
+    $("jobFill").parentElement.classList.remove("indeterminate");
     $("jobFill").style.width = "0%";
     $("jobHint").textContent = job.error;
   } else {
@@ -1486,6 +1490,11 @@ async function loadSettings() {
   const accel = { metal: "Apple GPU", cuda: "NVIDIA GPU", cpu: "no GPU" }[hw.accelerator] || hw.accelerator;
   $("setHw").textContent = `This computer: ${s.device_label}, ${hw.cpu_cores} cores, ${accel}.`;
   $("setRec").textContent = `Recommended: ${s.recommended_label}. ${s.recommended_why}`;
+  const warm = (s.warmup || {}).state;
+  $("setWarm").classList.toggle("hidden", warm !== "warming" && warm !== "waiting");
+  $("setWarm").textContent = warm === "warming"
+    ? "Preparing the speech engine for this computer. This happens once, so the first lecture is not slowed down."
+    : "The speech engine will be prepared for this computer once it is not recording or transcribing.";
 
   const ul = $("modelList"); ul.replaceChildren();
   const busy = !!(s.download && s.download.running);
@@ -1535,7 +1544,7 @@ async function loadSettings() {
     $("dlFill").style.width = pct + "%";
   }
   clearTimeout(dlTimer);
-  if (busy && $("settingsDlg").open) dlTimer = setTimeout(loadSettings, 800);
+  if ((busy || warm === "warming") && $("settingsDlg").open) dlTimer = setTimeout(loadSettings, 800);
 }
 
 // Donate: shown only inside the Mac app (its window identifies itself in the

@@ -181,6 +181,9 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0}
 .job-row{display:flex;justify-content:space-between;font-size:13px;margin-bottom:8px;font-variant-numeric:tabular-nums}
 .bar-track{height:6px;background:var(--rule);border-radius:3px;overflow:hidden}
 .bar-track i{display:block;height:100%;width:0;background:var(--accent);transition:width .4s ease}
+/* An engine that reports no percentage (Parakeet): a moving segment, never a number. */
+.bar-track.indeterminate i{width:30%;animation:indeterminate 1.4s ease-in-out infinite}
+@keyframes indeterminate{from{transform:translateX(-100%)}to{transform:translateX(335%)}}
 .hint{font-size:12.5px;color:var(--muted);margin:6px 0 0}
 
 /* player + tape */

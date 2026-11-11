@@ -66,7 +66,10 @@ ARCHIVE_MUXER = "ipod"        # what ffmpeg picks for .m4a; must be explicit for
 # per-token ms offsets inside readable sentence segments. No --vad: output_json
 # reads raw token structs that are never remapped to the original timeline.
 # Thread count is chosen at run time by hardware.whisper_threads().
-WHISPER_BEAM = 1             # greedy; beam search is not worth its cost here
+# Run the Core ML engine once in the background so its compile cache exists
+# before the first lecture (see warmup.py). LECTERN_WARMUP=0 turns it off.
+WARMUP = os.environ.get("LECTERN_WARMUP", "1") != "0"
+WHISPER_BEAM = 1            # greedy; beam search is not worth its cost here
 WHISPER_LANG = "en"
 
 # --- local LLM for study notes ----------------------------------------

@@ -34,7 +34,8 @@ import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from . import archive, concat, config, hardware, importer, live, models, notes, storage, transcribe
+from . import (archive, concat, config, hardware, importer, live, models, notes, storage,
+               transcribe, warmup)
 from .storage import Lecture
 
 class FifoLock:
@@ -109,11 +110,15 @@ class Job:
     message: str = ""
     error: str = ""
     done: bool = False
+    # True while the running engine gives no percentage (Parakeet): the page
+    # shows a moving "working" bar instead of a number that never moves.
+    indeterminate: bool = False
     started: float = field(default_factory=time.time)
 
     def as_dict(self) -> dict:
         return {"lecture_id": self.lecture_id, "stage": self.stage,
                 "percent": self.percent, "message": self.message,
+                "indeterminate": self.indeterminate,
                 "error": self.error, "done": self.done,
                 "elapsed_s": round(time.time() - self.started, 1)}
 
@@ -197,9 +202,11 @@ class Pipeline:
                 job.done = True
 
     # ------------------------------------------------------------- stages
-    def _set(self, job: Job, stage: str, percent: int, message: str = "") -> None:
+    def _set(self, job: Job, stage: str, percent: int, message: str = "",
+             indeterminate: bool = False) -> None:
         with self._lock:
             job.stage, job.percent, job.message = stage, percent, message
+            job.indeterminate = indeterminate
 
     def _run(self, job: Job, extract: bool = False) -> None:
         try:
@@ -306,11 +313,15 @@ class Pipeline:
         dur = lec.duration_ms()
         self._set(job, "transcribing", 10, "transcribing")
 
-        def on_pct(p: int) -> None:
+        def on_pct(p: int | None) -> None:
+            if p is None:          # the engine reports no progress (Parakeet): say so, no number
+                self._set(job, "transcribing", 10, "transcribing…", indeterminate=True)
+                return
             self._set(job, "transcribing", 10 + int(p * 0.55),
                       f"transcribing… {p}%")
 
         live.LIVE.wait_idle()      # never two engines at once (bounded)
+        warmup.WARMER.preempt()    # nor beside the engine warm-up (we hold STAGE_LOCK)
         t0 = time.time()
         raw, model_id = transcribe.run_with_fallback(lec.master_wav, lec.work / "whisper.raw",
                                                      progress_cb=on_pct)

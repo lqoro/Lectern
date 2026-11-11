@@ -421,6 +421,12 @@ class Downloader:
         except Exception as e:
             log.warning("model download failed: %s", e)
             self._set(running=False, error=str(e)[:300])
+            return
+        try:
+            from . import warmup                 # late: warmup imports this module
+            warmup.WARMER.request(installed_path(model))
+        except Exception:
+            log.exception("could not queue the engine warm-up for %s", model.id)
 
     def _download(self, model: Model) -> None:
         MODELS_DIR.mkdir(parents=True, exist_ok=True)

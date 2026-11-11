@@ -60,7 +60,9 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | 
                 threads: int | None = None, proc_cb=None) -> Path:
     """threads: whisper-cli threads (default hardware.whisper_threads()).
     proc_cb: called with the engine's Popen once it runs, so a caller (the live
-    draft) can kill it without waiting for it."""
+    draft) can kill it without waiting for it.
+    progress_cb: called with whisper's percentages; with None once the engine
+    is running when it reports none (fluidaudiocli), and with 100 at the end."""
     model = model or models.active_path()
     if model is None:
         raise TranscriptionError(
@@ -108,6 +110,13 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | 
             proc_cb(proc)
         except Exception:
             log.exception("proc_cb failed")
+    if coreml and progress_cb:
+        # fluidaudiocli prints nothing while it works: its logger reaches stderr only for
+        # warnings in release builds, and its batch mode has no progress hook at all.
+        try:
+            progress_cb(None)
+        except Exception:
+            log.exception("progress_cb failed")
     # A hung whisper (GPU stall) holds the stage lock and would block every
     # later lecture forever, so it gets a generous deadline and is killed.
     deadline_s = _whisper_deadline_s(wav)
@@ -141,7 +150,7 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | 
         _fluidaudio_to_whisper_json(fa_out, out)
         fa_out.unlink(missing_ok=True)
         if progress_cb:
-            progress_cb(100)        # the CLI reports no progress; the whole job takes seconds
+            progress_cb(100)
     return out
 
 

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
-from . import audio, config, importer, live, models, storage, usage
+from . import audio, config, importer, live, models, storage, usage, warmup
 from .pipeline import PIPELINE
 from .recorder import RECORDER, RecorderBusy
 from .storage import Lecture
@@ -154,6 +154,8 @@ def api_status():
     # Someone who already has a model is offered the faster recommended one (Parakeet) once.
     st["upgrade_model"] = models.upgrade_offer()
     st["version"] = config.VERSION
+    # "warming" while the Core ML engine is being prepared once (warmup.py).
+    st["warmup"] = warmup.WARMER.status()
     return jsonify(st)
 
 
@@ -432,7 +434,7 @@ def api_record_resume():
 @app.get("/api/system")
 def api_system():
     """Hardware, the speech models available, and which one will be used."""
-    return jsonify(models.describe())
+    return jsonify({**models.describe(), "warmup": warmup.WARMER.status()})
 
 
 @app.post("/api/models/select")
@@ -448,7 +450,8 @@ def api_model_select():
         return jsonify({"error": "that model is not downloaded yet"}), 409
     else:
         models.save_settings(whisper_model=mid)
-    return jsonify(models.describe())
+    warmup.WARMER.request()               # a newly active Core ML model is prepared once
+    return jsonify({**models.describe(), "warmup": warmup.WARMER.status()})
 
 
 @app.post("/api/models/download")
@@ -839,4 +842,6 @@ def create_app() -> Flask:
         app.logger.warning("adopted in-progress recording: %s", adopted)
     threading.Thread(target=_startup_maintenance, daemon=True).start()
     threading.Thread(target=_move_sweeper, daemon=True).start()
+    # Background and low priority; waits for recovery, recording and transcription.
+    warmup.WARMER.request(delay=warmup.START_DELAY_S)
     return app

@@ -11,6 +11,7 @@ def fresh_modules(tmp, **env):
     os.environ["LECTERN_SUPPORT"] = str(Path(tmp) / "support")
     os.environ["LECTERN_ROOT"] = str(Path(tmp) / "Lectures")
     os.environ.pop("LECTERN_MODEL", None)
+    env.setdefault("LECTERN_WARMUP", "0")      # never run an engine warm-up unless a test asks
     os.environ.update(env)
     for name in [m for m in sys.modules if m.startswith("lectern")]:
         del sys.modules[name]
