@@ -2,9 +2,10 @@
 
 Everything is measured, never estimated: directories are walked (symlinks are
 not followed, so nothing is counted twice or outside its folder), model files
-are stat()ed, and the notes model's size comes from Ollama. A walk over a big
-Python environment takes a fraction of a second, so the result is cached
-briefly; the Settings panel is the only caller.
+are stat()ed, and the notes model's size comes from Ollama. The result is
+cached briefly; the Settings panel is the only caller. The app folder (a big
+Python environment) is walked only once per process, since it does not
+change while the app runs.
 """
 from __future__ import annotations
 
@@ -22,6 +23,9 @@ REPO_DIR = Path(__file__).resolve().parent.parent
 CACHE_S = 20
 _cache: tuple[float, dict] | None = None
 _lock = threading.Lock()
+# The app folder (program + Python environment, often 1 GB+ of small files)
+# does not change while it runs, so it is walked once per process.
+_app_bytes: int | None = None
 
 
 def dir_size(path: Path, *, skip: tuple[Path, ...] = ()) -> int:
@@ -73,6 +77,15 @@ def _notes_model() -> dict | None:
     return None
 
 
+def _app_size() -> int:
+    """The app folder, minus things counted elsewhere or that are not part of
+    the installed app (a developer's benchmark downloads). Lock held."""
+    global _app_bytes
+    if _app_bytes is None:
+        _app_bytes = dir_size(REPO_DIR, skip=(REPO_DIR / "bench",))
+    return _app_bytes
+
+
 def report(force: bool = False) -> dict:
     global _cache
     with _lock:
@@ -84,9 +97,7 @@ def report(force: bool = False) -> dict:
         own_models, shared_models, model_list = _speech_models()
         notes = _notes_model()
         support = dir_size(config.SUPPORT_DIR, skip=(models.MODELS_DIR,))
-        # The app folder, minus things counted elsewhere or that are not part
-        # of the installed app (a developer's benchmark downloads).
-        app = dir_size(REPO_DIR, skip=(REPO_DIR / "bench",))
+        app = _app_size()
         disk = shutil.disk_usage(config.LECTURES_ROOT)
         parts = [
             {"key": "lectures", "label": "Lectures", "bytes": lectures,

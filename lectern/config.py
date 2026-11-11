@@ -131,8 +131,18 @@ MIN_FREE_BYTES_START = 2 * 1024**3    # refuse to start recording below 2 GB
 MIN_FREE_BYTES_STOP = 500 * 1024**2   # stop gracefully below 500 MB
 
 
+_ensured: tuple[Path, ...] | None = None
+
+
 def ensure_dirs() -> None:
-    for d in (LECTURES_ROOT, TRASH_DIR, SUPPORT_DIR, LOG_DIR):
+    """Create the app's folders. Called on nearly every request, so after the
+    first time for these paths it only checks that .trash is still there (one
+    stat), and does the full job again if it was deleted or a path changed."""
+    global _ensured
+    key = (LECTURES_ROOT, TRASH_DIR, SUPPORT_DIR, LOG_DIR)
+    if _ensured == key and TRASH_DIR.is_dir():
+        return
+    for d in key:
         d.mkdir(parents=True, exist_ok=True)
     marker = TRASH_DIR / ".metadata_never_index"
     if not marker.exists():
@@ -140,6 +150,7 @@ def ensure_dirs() -> None:
     readme = LECTURES_ROOT / "README.txt"
     if not readme.exists():
         readme.write_text(_README)
+    _ensured = key
 
 
 _README = """\

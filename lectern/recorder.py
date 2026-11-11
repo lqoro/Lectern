@@ -235,9 +235,17 @@ class Recorder:
                     f"Not enough free disk space to start "
                     f"({storage.free_bytes()/1e9:.1f} GB free).")
 
-            device = audio.resolve_device(fresh=True)   # indices shift; never cache this
-            if not skip_probe:
+            # A mic test that just passed in the dialog (/api/preflight) is
+            # reused when the device resolves to the same one (name AND index)
+            # from a listing at most audio._CACHE_TTL old. Otherwise list
+            # afresh -- indices shift -- and test again. The hotkey path
+            # (skip_probe) has no dialog, so it always lists afresh.
+            tested = None if skip_probe else audio.recent_preflight()
+            audio.forget_preflight()
+            device = audio.resolve_device(fresh=tested is None)
+            if not skip_probe and device != tested:
                 audio.probe(device)          # raises PreflightError with a kind
+                audio.forget_preflight()     # used by this start
 
             _require_capture_helper()        # before anything is created
 
@@ -267,7 +275,7 @@ class Recorder:
         try:
             storage.atomic_write_json(lec.work / "recording.json", {
                 "pid": proc.pid,
-                "boot_sec": storage.boot_seconds(),
+                "boot_sec": storage.boot_seconds(fresh=True),
                 "argv_token": lec.id,
                 "started_utc": storage.utcnow(),
                 "device_name": device.name,
@@ -372,7 +380,9 @@ class Recorder:
                     elif k == "event":
                         self._state.event = v.strip()
         except Exception:
-            pass
+            # The watchdog still supervises the writer; this only loses the
+            # progress/event feed, so log it instead of crashing the thread.
+            log.warning("helper progress reader stopped", exc_info=True)
 
     def _watch(self) -> None:
         self._supervise(adopted=False)

@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import wave
 from dataclasses import dataclass
@@ -172,7 +173,44 @@ def resolve_device(preferred: list[str] | None = None,
     return devices[0]
 
 
+# Record start reuses a mic test that passed this recently on the same device
+# (the dialog's /api/preflight) instead of listing devices and recording a
+# second test clip, which made Start take 3-7 s. The window covers typing a
+# title; a mic that fails after that is still caught by the helper exiting at
+# once (cannot open) or the stall watchdog (no audio).
+PREFLIGHT_REUSE_S = 30.0
+_preflight_lock = threading.Lock()
+_last_preflight: tuple[float, Device] | None = None
+
+
+def recent_preflight() -> Device | None:
+    """The device of a mic test that passed within PREFLIGHT_REUSE_S, if any."""
+    with _preflight_lock:
+        if _last_preflight is None:
+            return None
+        at, device = _last_preflight
+        return device if time.monotonic() - at < PREFLIGHT_REUSE_S else None
+
+
+def forget_preflight() -> None:
+    """A passed test is good for one recording start only."""
+    global _last_preflight
+    with _preflight_lock:
+        _last_preflight = None
+
+
 def probe(device: Device, seconds: float = 1.8) -> dict:
+    """_probe, remembering a pass so record start can reuse it (see
+    PREFLIGHT_REUSE_S). A failure forgets any earlier pass."""
+    global _last_preflight
+    forget_preflight()
+    res = _probe(device, seconds)
+    with _preflight_lock:
+        _last_preflight = (time.monotonic(), device)
+    return res
+
+
+def _probe(device: Device, seconds: float = 1.8) -> dict:
     """Record a short burst and classify the result.
 
     Returns {rms, peak, frames} on success. Raises PreflightError with

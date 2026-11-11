@@ -94,13 +94,24 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def boot_seconds() -> int:
+_boot_sec: int | None = None
+
+
+def boot_seconds(*, fresh: bool = False) -> int:
     """Boot time as a PID-reuse-proof liveness token.
 
     If the machine rebooted, any PID recorded before is meaningless — which is
     exactly the power-loss case we must detect.
+
+    Cached for the process (it spawns sysctl on macOS, and startup asks once
+    per leftover recording.json). fresh=True re-reads it: recording.json is
+    written that way, so a value stored hours into a long-running process is
+    as exact as before. An unknown (0) result is never cached.
     """
-    return pc.boot_seconds()
+    global _boot_sec
+    if fresh or not _boot_sec:
+        _boot_sec = pc.boot_seconds() or None
+    return _boot_sec or 0
 
 
 # Every id is created_at + slugify() (+ "-n"): letters, digits, "_" and "-".
@@ -197,6 +208,7 @@ class Lecture:
         folder = clean_folder(folder)
         dest_dir = (config.LECTURES_ROOT / folder) if folder else config.LECTURES_ROOT
         dest_dir.mkdir(parents=True, exist_ok=True)
+        invalidate_folder_cache()
         dest = dest_dir / self.path.name
         if dest == self.path:
             self.set_pending_folder(None)   # already there: nothing left to apply
@@ -218,10 +230,11 @@ class Lecture:
         folder = clean_folder(folder)
         root = (config.LECTURES_ROOT / folder) if folder else config.LECTURES_ROOT
         root.mkdir(parents=True, exist_ok=True)
+        invalidate_folder_cache()
         # The id (directory name) must be unique across ALL class folders,
         # because Lecture.load finds a lecture by id alone.
         taken = {p.name for p in config.LECTURES_ROOT.iterdir()}
-        for d in _folder_dirs():
+        for d in _folder_dirs(fresh=True):
             taken.update(p.name for p in d.iterdir())
         name, n = base, 2
         while name in taken:
@@ -246,6 +259,9 @@ class Lecture:
             "audio": {}, "transcript": {}, "notes": {},
             "app": {"name": config.APP_NAME, "version": config.VERSION},
         }, durable=True)
+        # A scan that ran while this directory had no lecture.json yet would
+        # have listed it as a class folder.
+        invalidate_folder_cache()
         lec.set_stage(state)
         return lec
 
@@ -261,10 +277,11 @@ class Lecture:
         direct = config.LECTURES_ROOT / lecture_id
         if (direct / "lecture.json").is_file():
             return cls(direct)
-        for folder in _folder_dirs():
-            p = folder / lecture_id
-            if (p / "lecture.json").is_file():
-                return cls(p)
+        for fresh in (False, True):      # a cached folder list, then a real look
+            for folder in _folder_dirs(fresh=fresh):
+                p = folder / lecture_id
+                if (p / "lecture.json").is_file():
+                    return cls(p)
         raise FileNotFoundError(f"no such lecture: {lecture_id}")
 
     def trash(self) -> Path:
@@ -279,6 +296,7 @@ class Lecture:
             dest = config.TRASH_DIR / f"{self.path.name}-{n}"
             n += 1
         replace(self.path, dest)
+        invalidate_folder_cache()
         # rename keeps the old mtime, and the 7-day sweep ages entries by
         # mtime: without this a 3-week-old lecture is purged on next start.
         now = time.time()
@@ -407,8 +425,38 @@ def clean_folder(name: str) -> str:
     return name + "_" if _RESERVED.fullmatch(name) else name
 
 
-def _folder_dirs() -> list[Path]:
+# Lecture.load of a lecture inside a class looks through the class folders,
+# which costs a stat of every top-level entry; it runs on every request for
+# that lecture, audio Range requests included. The list is kept briefly and
+# dropped whenever the app creates, renames or moves into a folder. A folder
+# made in Finder shows up within FOLDER_CACHE_S, and Lecture.load re-scans
+# before it reports a lecture missing, so the cache never causes a 404.
+FOLDER_CACHE_S = 2.0
+_folder_cache: tuple[float, Path, list[Path]] | None = None
+_folder_cache_lock = threading.Lock()
+
+
+def invalidate_folder_cache() -> None:
+    global _folder_cache
+    with _folder_cache_lock:
+        _folder_cache = None
+
+
+def _folder_dirs(*, fresh: bool = False) -> list[Path]:
     """Immediate subdirectories of ~/Lectures that hold lectures, not one."""
+    global _folder_cache
+    with _folder_cache_lock:
+        c = _folder_cache
+        if (not fresh and c is not None and c[1] == config.LECTURES_ROOT
+                and time.monotonic() - c[0] < FOLDER_CACHE_S):
+            return list(c[2])
+    out = _scan_folder_dirs()
+    with _folder_cache_lock:
+        _folder_cache = (time.monotonic(), config.LECTURES_ROOT, out)
+    return list(out)
+
+
+def _scan_folder_dirs() -> list[Path]:
     config.ensure_dirs()
     out = []
     for p in config.LECTURES_ROOT.iterdir():
@@ -440,6 +488,7 @@ def create_folder(name: str) -> str:
     if same:
         return same
     (config.LECTURES_ROOT / name).mkdir(parents=True, exist_ok=True)
+    invalidate_folder_cache()
     return name
 
 
@@ -453,7 +502,10 @@ def rename_folder(old: str, new: str) -> str:
         raise FileNotFoundError(old_c)
     if dst.exists() and not os.path.samefile(src, dst):   # "bio" -> "Bio" is fine
         raise FileExistsError(new_c)
-    replace(src, dst)
+    try:
+        replace(src, dst)
+    finally:
+        invalidate_folder_cache()
     return new_c
 
 

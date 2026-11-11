@@ -278,9 +278,16 @@ def api_legal(doc: str):
     name = LEGAL_DOCS.get(doc)
     if not name:
         abort(404)
-    if doc == "texts" and not (REPO_DIR / name).is_file():
+    path = REPO_DIR / name             # a fixed name from LEGAL_DOCS, never user input
+    if doc == "texts" and not path.is_file():
         return Response(NO_TEXTS, mimetype="text/plain; charset=utf-8")
-    return send_from_directory(REPO_DIR, name, mimetype="text/plain; charset=utf-8")
+    try:
+        # Small text files: read and close here rather than stream a file
+        # object that is only closed whenever the response is.
+        data = path.read_bytes()
+    except FileNotFoundError:
+        abort(404)
+    return Response(data, mimetype="text/plain; charset=utf-8")
 
 
 @app.get("/api/notice")
@@ -646,6 +653,7 @@ def api_folder_rename(name: str):
             for l in Lecture.all():            # queued moves follow the rename
                 if l.pending_folder() == old:
                     l.set_pending_folder(new)
+                    _MOVES_WANTED.set()
         return jsonify({"name": new})
     except FileNotFoundError:
         return jsonify({"error": "no such folder"}), 404
@@ -668,6 +676,7 @@ def api_lecture_move(lecture_id: str):
             lec = _load(lecture_id)      # fresh path: a queued move may have run
             if _busy(lec.id):
                 lec.set_pending_folder(None if folder == lec.folder else folder)
+                _MOVES_WANTED.set()
                 return jsonify({**lec.to_summary(), "deferred": True})
             lec.move_to_folder(folder)
     except FileExistsError:
@@ -687,6 +696,12 @@ _MOVE_LOCK = threading.Lock()
 # Set once startup recovery has run. Until then a lecture that looks idle may
 # be one recovery is about to salvage and requeue, so every move is queued.
 _STARTUP_DONE = threading.Event()
+# Set while a queued move may be waiting. Starts set, because a move queued
+# before the last shutdown is still on disk; cleared by a sweep that finds
+# nothing left to apply, so an idle app does not rescan every lecture forever.
+_MOVES_WANTED = threading.Event()
+_MOVES_WANTED.set()
+MOVE_SWEEP_S = 3.0
 
 
 def _busy(lecture_id: str) -> bool:
@@ -717,7 +732,9 @@ def _busy_error(lecture_id: str):
 
 
 def _apply_pending_moves() -> int:
-    moved = 0
+    moved = left = 0
+    # Cleared before the scan: a move queued while it runs sets it again.
+    _MOVES_WANTED.clear()
     for lec in Lecture.all():
         if lec.pending_folder() is None:
             continue
@@ -729,7 +746,10 @@ def _apply_pending_moves() -> int:
             except (FileNotFoundError, ValueError):
                 continue
             target = lec.pending_folder()
-            if target is None or _busy(lec.id):
+            if target is None:
+                continue
+            if _busy(lec.id):
+                left += 1                # retried once it is idle
                 continue
             try:
                 if target != lec.folder:
@@ -742,17 +762,22 @@ def _apply_pending_moves() -> int:
                             "queued move", lec.id, target)
                 lec.set_pending_folder(None)
             except OSError:
+                left += 1
                 log.exception("queued move of %s failed; will retry", lec.id)
+    if left:
+        _MOVES_WANTED.set()
     return moved
 
 
 def _move_sweeper() -> None:
     _STARTUP_DONE.wait()
     while True:
-        time.sleep(3.0)
+        _MOVES_WANTED.wait()             # idle until a move is queued
+        time.sleep(MOVE_SWEEP_S)
         try:
             _apply_pending_moves()
         except Exception:
+            _MOVES_WANTED.set()          # try again next round
             log.exception("pending-move sweep failed")
 
 
@@ -768,7 +793,7 @@ def _startup_maintenance() -> None:
         app.logger.exception("capture helper build failed")
     try:
         ids = recovery.run_startup_recovery(PIPELINE.submit, PIPELINE.submit_import,
-                                           PIPELINE.is_running)
+                                           PIPELINE.is_running, PIPELINE.submit_notes)
         if ids:
             app.logger.warning("recovered interrupted lectures: %s", ids)
     except Exception:

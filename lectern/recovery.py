@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from . import archive, config, storage
+from . import platform_compat as pc
 from .storage import Lecture
 
 # An import whose upload file was written this recently is still streaming in.
@@ -137,18 +138,68 @@ def finish_released(lec: Lecture) -> bool:
     return False
 
 
+def _state_before(m: dict, state: str) -> str | None:
+    """The last stage_history state that differs from `state`."""
+    for h in reversed(m.get("stage_history") or []):
+        if h.get("s") != state:
+            return h.get("s")
+    return None
+
+
+def finish_notes_only(lec: Lecture) -> str | None:
+    """A run interrupted after its archive was installed and verified, so only
+    the study notes are left. The pipeline runs archive BEFORE notes and sets
+    "noting" only once the archive stage has returned. Returns "requeue" when
+    the notes should be written again, "restored" when a notes rewrite was
+    interrupted on a lecture that had failed earlier, else None.
+
+    Older versions wrote notes BEFORE archiving: "noting" right after
+    "transcribing" means the audio may exist only in .work (a resumed lecture
+    can even have an older archive beside it), so that case is left to the
+    full recover() path. Nothing is released here that finish_released would
+    not release for any complete lecture."""
+    if not lec.archive_path.is_file() or not lec.transcript_path.is_file():
+        return None
+    m = lec.manifest()
+    state = m.get("state")
+    before = _state_before(m, state)
+    if state == "noting" and before in ("archiving", "complete"):
+        pass                    # pipeline after archive, or a "Rewrite notes"
+    elif state == "noting" and before == "failed":
+        lec.set_state("failed")         # an interrupted rewrite: as it was
+        return "restored"
+    elif state == "archiving" and before == "transcribing" and not lec.work.is_dir():
+        pass                    # archive installed and .work released; notes next
+    else:
+        return None
+    lec.set_state("complete")
+    finish_released(lec)        # a .work the archive step could not move yet
+    return "requeue"
+
+
 def run_startup_recovery(submit, submit_import=None,
-                         is_running=lambda _id: False) -> list[str]:
+                         is_running=lambda _id: False,
+                         submit_notes=None) -> list[str]:
     """Recover every interrupted lecture and requeue it. Returns lecture ids.
-    is_running: a job a user started meanwhile owns its lecture; leave it."""
+    is_running: a job a user started meanwhile owns its lecture; leave it.
+    submit_notes: requeue only the notes of a lecture whose audio is archived."""
     from .recorder import self_pause_reason
+    done = []
     for lec in Lecture.all():
+        if is_running(lec.id):
+            continue
         try:
-            if finish_released(lec):
+            what = finish_notes_only(lec)
+            if what == "requeue":
+                log.warning("%s was interrupted while writing notes; its audio "
+                            "is archived, so only the notes are redone", lec.id)
+                if submit_notes:
+                    submit_notes(lec.id)
+                    done.append(lec.id)
+            elif what is None and finish_released(lec):
                 log.warning("finished the interrupted last step of %s", lec.id)
         except Exception:
             log.exception("could not finish %s", lec.id)
-    done = []
     for lec in scan_interrupted():
         if is_running(lec.id):
             continue
@@ -220,9 +271,11 @@ def _reverify(lec: Lecture) -> bool:
         streams = probe.get("streams") or []
         if not streams or streams[0].get("codec_name") != "aac":
             return False
-        proc = subprocess.run(
-            [config.FFMPEG, "-nostdin", "-v", "error", "-i", str(p), "-f", "null", "-"],
-            capture_output=True, text=True, timeout=3600)
+        # Below normal priority: this runs on every startup, beside the UI and
+        # possibly a live recording.
+        argv, extra = pc.low_priority(
+            [config.FFMPEG, "-nostdin", "-v", "error", "-i", str(p), "-f", "null", "-"])
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=3600, **extra)
         return proc.returncode == 0 and not proc.stderr.strip()
     except Exception:
         log.exception("re-verification errored for %s", lec.id)
@@ -261,12 +314,37 @@ def _purge_work_dir(work: Path) -> int:
     return n
 
 
+# Trash entries whose archive did NOT re-verify, with what they looked like
+# then. An entry is skipped (kept, never deleted) while both it and the
+# archive are unchanged, instead of fully decoding the same archive again on
+# every start. Anything that changes either one gets a full check again.
+# Derived data: deleting the file only means one more decode.
+def _failed_path() -> Path:
+    return config.SUPPORT_DIR / "trash-unverified.json"
+
+
+def _fingerprint(entry: Path, lec: Lecture) -> list:
+    a, e = lec.archive_path.stat(), entry.stat()
+    return [str(lec.archive_path.relative_to(config.LECTURES_ROOT)),
+            a.st_size, a.st_mtime_ns, e.st_mtime_ns]
+
+
+def _load_failed() -> dict:
+    try:
+        d = json.loads(_failed_path().read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def sweep_trash() -> dict:
     """Second-phase release, plus the 7-day hard sweep."""
     config.ensure_dirs()
     freed = 0
     purged = 0
     kept = 0
+    failed_before = _load_failed()
+    failed_now: dict = {}
     for entry in sorted(config.TRASH_DIR.iterdir()):
         if entry.name.startswith("."):
             continue
@@ -285,6 +363,12 @@ def sweep_trash() -> dict:
                     # WAVs. Keep them for a person to look at.
                     kept += 1
                     log.warning("keeping %s: a segment failed to concatenate", entry.name)
+                elif (lec is not None and lec.archive_path.is_file()
+                      and failed_before.get(entry.name) == _fingerprint(entry, lec)):
+                    kept += 1
+                    failed_now[entry.name] = failed_before[entry.name]
+                    log.warning("keeping %s: its archive did not re-verify before "
+                                "and nothing has changed since", entry.name)
                 elif lec is not None and _reverify(lec):
                     size = sum(p.stat().st_size for p in entry.glob("*") if p.is_file())
                     purged += _purge_work_dir(entry)
@@ -299,6 +383,8 @@ def sweep_trash() -> dict:
                     log.info("released working files for %s (%.1f MB)", lecture_id, size / 1e6)
                 else:
                     kept += 1
+                    if lec is not None and lec.archive_path.is_file():
+                        failed_now[entry.name] = _fingerprint(entry, lec)
                     log.warning("keeping %s: archive did not re-verify", entry.name)
             except Exception:
                 # One lecture moving or failing must not stop the rest of the
@@ -316,6 +402,11 @@ def sweep_trash() -> dict:
                          entry.name, n, size / 1e6)
             except Exception:
                 log.exception("could not sweep %s", entry.name)
+    if failed_now != failed_before:
+        try:
+            storage.atomic_write_json(_failed_path(), failed_now)
+        except OSError:
+            log.exception("could not save the list of unverified archives")
     return {"files_removed": purged, "bytes_freed": freed, "dirs_kept": kept}
 
 

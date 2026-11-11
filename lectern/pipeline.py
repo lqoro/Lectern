@@ -1,9 +1,27 @@
-"""Post-recording processing, serialized by a global stage lock.
+"""Post-recording processing: extract -> concat -> transcribe -> archive -> notes.
 
-The RAM invariant this module enforces: whisper peaks around 1.05 GB on a
-50-minute lecture and qwen2.5:3b needs ~2.3 GB. On an 8 GB machine that is
-already swapping with a browser open, they must NEVER be resident together.
-One process-wide lock guarantees at most one heavy stage runs at a time.
+Two process-wide FIFO locks:
+  * STAGE_LOCK serializes the audio stages (extract, concat, transcribe,
+    archive), so at most one whisper runs at a time.
+  * NOTES_LOCK serializes the notes stage (the Ollama LLM, up to ~30 min).
+
+Archive runs before notes so the player switches from the huge master.wav to
+the compressed archive as soon as the audio is safe, and a lecture's notes no
+longer hold up the next lecture's transcription (or a notes rewrite on another
+lecture).
+
+The RAM invariant on small machines: whisper peaks around 1.05 GB on a
+50-minute lecture and qwen2.5:3b needs ~2.3 GB. Below SHARED_RAM_MIN_BYTES
+(hardware.effective_ram_bytes, i.e. in 8 GB-Mac terms; unknown RAM counts as
+small) they must NEVER be resident together, so the notes stage also holds
+STAGE_LOCK while the LLM runs -- the old behaviour, for both the pipeline's
+notes and "Rewrite notes". At or above it, notes hold only NOTES_LOCK and may
+run beside another lecture's transcription. Lock order is always NOTES_LOCK
+then STAGE_LOCK; the audio path takes only STAGE_LOCK and releases it before
+it queues for notes, so the two cannot deadlock.
+
+Recovery (recovery.py) relies on "noting" being set only AFTER the archive
+stage has returned, i.e. once the archive is installed and verified.
 """
 from __future__ import annotations
 
@@ -13,9 +31,10 @@ import subprocess
 import threading
 import time
 import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from . import archive, concat, config, importer, models, notes, storage, transcribe
+from . import archive, concat, config, hardware, importer, models, notes, storage, transcribe
 from .storage import Lecture
 
 class FifoLock:
@@ -45,9 +64,36 @@ class FifoLock:
             self._cv.notify_all()
 
 
-# The RAM interlock. Every heavy stage acquires this.
+# Audio stages (at most one transcription at a time).
 STAGE_LOCK = FifoLock()
+# The notes stage, on its own so a long LLM run never blocks transcription
+# (on machines with room for both; see SHARED_RAM_MIN_BYTES).
+NOTES_LOCK = FifoLock()
+# Below this much RAM, in Mac terms, notes also take STAGE_LOCK (module doc).
+SHARED_RAM_MIN_BYTES = 12 * 1024**3
 log = logging.getLogger(__name__)
+
+
+def notes_share_ram() -> bool:
+    """May the notes model run while whisper does? False when RAM is unknown."""
+    try:
+        eff = hardware.effective_ram_bytes()
+    except Exception:
+        log.exception("could not read total RAM; keeping notes and whisper apart")
+        return False
+    return bool(eff) and eff >= SHARED_RAM_MIN_BYTES
+
+
+@contextmanager
+def notes_slot():
+    """The locks the notes stage holds: NOTES_LOCK, then, on a small machine,
+    STAGE_LOCK as well. Never acquire these in the other order."""
+    with NOTES_LOCK:
+        if notes_share_ram():
+            yield
+        else:
+            with STAGE_LOCK:
+                yield
 
 
 @dataclass
@@ -126,7 +172,7 @@ class Pipeline:
                 raise RuntimeError("there is no transcript yet")
             prior = lec.manifest().get("state") or "complete"
             self._set(job, "waiting", 0, "waiting for a free processing slot")
-            with STAGE_LOCK:
+            with notes_slot():
                 try:
                     self._notes(job, lec)
                 finally:
@@ -165,8 +211,15 @@ class Pipeline:
                     self._extract(job, lec)
                 self._concat(job, lec)
                 self._transcribe(job, lec)
-                self._notes(job, lec)
                 self._archive(job, lec)
+            # The audio is archived and verified from here on. "noting" is set
+            # only now, which is what tells recovery that only notes are left.
+            lec.set_state("noting")
+            self._set(job, "noting", 70, "waiting to write study notes")
+            # STAGE_LOCK was released above; notes_slot may take it again
+            # (small machines), always after NOTES_LOCK.
+            with notes_slot():
+                self._notes(job, lec)
             lec.set_state("complete", failure=None)   # a re-run clears an old failure
             self._set(job, "complete", 100, "done")
         except Exception as e:
@@ -176,7 +229,7 @@ class Pipeline:
             try:
                 lec.set_state("failed", failure=str(e)[:500])
             except Exception:
-                pass
+                log.exception("could not mark %s failed", job.lecture_id)
             self._set(job, "failed", job.percent, str(e)[:300])
             try:
                 with (config.LOG_DIR / "pipeline.log").open("a") as lf:
@@ -244,7 +297,7 @@ class Pipeline:
         self._set(job, "transcribing", 10, "transcribing")
 
         def on_pct(p: int) -> None:
-            self._set(job, "transcribing", 10 + int(p * 0.85),
+            self._set(job, "transcribing", 10 + int(p * 0.55),
                       f"transcribing… {p}%")
 
         t0 = time.time()
@@ -265,17 +318,18 @@ class Pipeline:
             "model": model_id,
             "compute_s": round(time.time() - t0, 1),
         })
-        self._set(job, "transcribing", 58,
+        self._set(job, "transcribing", 65,
                   f"{len(doc['words']['w'])} words transcribed")
 
     def _notes(self, job: Job, lec: Lecture) -> None:
-        """Study notes. whisper has already exited, so the ~2.3 GB model never
-        shares memory with it -- that is the whole point of the stage lock.
+        """Study notes, after the archive. Runs under notes_slot(): beside
+        another lecture's whisper only on a machine with room for both.
         Notes never fail a recording: the extractive fallback always produces
         something, and notes are regenerable from transcript.json at any time.
         """
-        lec.set_state("noting")
-        self._set(job, "noting", 62, "writing study notes")
+        if lec.manifest().get("state") != "noting":
+            lec.set_state("noting")
+        self._set(job, "noting", 72, "writing study notes")
         try:
             doc = json.loads(lec.transcript_path.read_text())
         except Exception as e:
@@ -285,7 +339,7 @@ class Pipeline:
         def on_chunk(i: int, n: int) -> None:
             # Progress, never an ETA: generation speed on a machine that may be
             # paging has not been measured and a wrong ETA is worse than none.
-            self._set(job, "noting", 62 + int(26 * i / max(1, n)),
+            self._set(job, "noting", 72 + int(26 * i / max(1, n)),
                       f"writing study notes… part {i+1} of {n}")
 
         t0 = time.time()
@@ -304,7 +358,7 @@ class Pipeline:
                           "quiz": len(nd.get("quiz") or []),
                           "generated_utc": storage.utcnow(),
                           "compute_s": round(time.time() - t0, 1)})
-        self._set(job, "noting", 90, f"{n_bul} notes written")
+        self._set(job, "noting", 98, f"{n_bul} notes written")
 
     def _archive(self, job: Job, lec: Lecture) -> None:
         """Compress to AAC and verify before any WAV is released."""
@@ -317,15 +371,15 @@ class Pipeline:
         if man.get("from_archive"):
             # This run decoded an existing archive; re-encoding it would be a
             # second lossy generation for no benefit.
-            self._set(job, "archiving", 99, "archive already in place")
+            self._set(job, "archiving", 69, "archive already in place")
             archive.release_work(lec)
             return
-        self._set(job, "archiving", 92, "compressing audio for long-term storage")
+        self._set(job, "archiving", 66, "compressing audio for long-term storage")
         before = lec.master_wav.stat().st_size if lec.master_wav.is_file() else 0
         info = archive.archive_lecture(lec)
         after = info["bytes"]
         ratio = (before / after) if after else 0
-        self._set(job, "archiving", 99,
+        self._set(job, "archiving", 69,
                   f"archived to {after/1e6:.1f} MB ({ratio:.1f}x smaller)")
 
 
