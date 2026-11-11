@@ -467,6 +467,7 @@ function showLibrary() {
 
 async function openLecture(id) {
   R.id = id;
+  R.doc = null; R.notesKey = null; TAPE.notes = [];
   $("library").classList.add("hidden");
   $("reader").classList.remove("hidden");
   $("backBtn").classList.remove("hidden");
@@ -476,11 +477,31 @@ async function openLecture(id) {
   await refreshLecture(true);
 }
 
+// 404 means "not written yet" (still processing); anything else is a real
+// failure and is shown.
+async function fetchPart(id, part, what) {
+  try { return await api(`/api/lecture/${encodeURIComponent(id)}/${part}`); }
+  catch (e) {
+    if (e.status !== 404 && R.id === id) toast(`Could not load the ${what}.`);
+    return null;
+  }
+}
+
+let jobTimer = 0;
 async function refreshLecture(first) {
   if (!R.id) return;
+  const id = R.id;
+  // Everything the page needs is requested at once. On the first open the
+  // library list (if loaded) says which of transcript/notes exist, so those
+  // start now instead of after the lecture record comes back.
+  const hint = first ? L.lectures.find((x) => x.id === id) : null;
+  let tP = first && (!hint || hint.has_transcript) ? fetchPart(id, "transcript", "transcript") : null;
+  let nP = first && (!hint || hint.has_notes) ? fetchPart(id, "notes", "notes") : null;
+  const foldersP = L.folders.length ? null : refreshFolders();
   let d;
-  try { d = await api(`/api/lecture/${encodeURIComponent(R.id)}`); }
+  try { d = await api(`/api/lecture/${encodeURIComponent(id)}`); }
   catch { toast("Could not load that lecture."); return showLibrary(); }
+  if (R.id !== id) return;
 
   R.lastLecture = d;
   $("lecTitle").textContent = d.title;
@@ -492,8 +513,51 @@ async function refreshLecture(first) {
   if (d.bytes) bits.push(`${(d.bytes / 1e6).toFixed(1)} MB`);
   $("lecMeta").textContent = bits.join(" · ");
 
-  await renderClassRow(d);
-  if (!(d.job && !d.job.done)) {           // the job loop already refreshes
+  const running = !!(d.job && !d.job.done);
+  const job = d.job;
+
+  // Transcript: render the moment it arrives, independent of notes/class row.
+  if (!tP && d.has_transcript && !R.doc) tP = fetchPart(id, "transcript", "transcript");
+  const tDone = tP && tP.then((doc) => {
+    if (!doc || R.id !== id || !(first || !R.doc)) return;
+    buildIndex(doc); renderTranscript(doc); drawTape();
+    $("durTime").textContent = fmt(doc.duration_ms / 1000);
+  });
+  if (!d.has_transcript && !job && !R.doc) {
+    $("transcript").innerHTML =
+      `<p class="muted">No transcript yet. <button id="reproc" class="ghost">Process now</button></p>`;
+    const b = $("reproc");
+    if (b) b.onclick = async () => {
+      await jpost(`/api/lecture/${encodeURIComponent(R.id)}/process`);
+      refreshLecture(false);
+    };
+  }
+
+  // Notes: only fetched/rebuilt when they could have changed -- they appear
+  // (has_notes) or a rewrite starts/finishes (job running flips).
+  const notesKey = `${d.has_notes}|${running}`;
+  let nDone = null;
+  if (notesKey !== R.notesKey) {
+    R.notesKey = notesKey;
+    if (d.has_notes) {
+      nDone = (nP || fetchPart(id, "notes", "notes")).then((doc) => {
+        if (doc && R.id === id) renderNotes(doc);
+      });
+    } else if (!job) {
+      $("notes").innerHTML =
+        `<p class="muted">No notes yet. ` +
+        `<button id="genNotes" class="ghost">Write study notes</button></p>`;
+      const g = $("genNotes");
+      if (g) g.onclick = async () => {
+        g.disabled = true; g.textContent = "starting…";
+        await jpost(`/api/lecture/${encodeURIComponent(R.id)}/notes/regenerate`);
+        refreshLecture(false);
+      };
+    }
+  }
+
+  const classRow = renderClassRow(d);
+  if (!running) {                          // the job loop already refreshes
     recheckWhilePending("lecture", d.pending_folder != null, () => refreshLecture(false));
   }
 
@@ -505,7 +569,7 @@ async function refreshLecture(first) {
   // and idle — never while it is actively processing, and never while a
   // DIFFERENT lecture is being recorded right now.
   const resumable = ["paused", "complete", "failed"].includes(d.state)
-    && !(d.job && !d.job.done) && !recActive;
+    && !running && !recActive;
   const rb = $("resumeBox");
   if (resumable) {
     rb.classList.remove("hidden");
@@ -521,16 +585,16 @@ async function refreshLecture(first) {
     rb.classList.add("hidden");
   }
 
-  const job = d.job;
   const box = $("jobBox");
-  if (job && !job.done) {
+  clearTimeout(jobTimer);
+  if (running) {
     box.classList.remove("hidden");
     $("jobStage").textContent = job.message || job.stage;
     $("jobPct").textContent = job.percent ? `${job.percent}%` : "";
     $("jobFill").style.width = `${job.percent || 0}%`;
     $("jobHint").textContent =
       "This runs in the background on this computer. You can leave this page.";
-    setTimeout(() => refreshLecture(false), 1200);
+    jobTimer = setTimeout(() => refreshLecture(false), 1200);
   } else if (job && job.error) {
     box.classList.remove("hidden");
     $("jobStage").textContent = "Processing failed";
@@ -547,45 +611,15 @@ async function refreshLecture(first) {
     if (!audio.src || !audio.src.endsWith(src)) audio.src = src;
   } else $("player").classList.add("hidden");
 
-  if (d.has_notes) {
-    try { renderNotes(await api(`/api/lecture/${encodeURIComponent(R.id)}/notes`)); }
-    catch { /* not ready */ }
-  } else if (!job) {
-    $("notes").innerHTML =
-      `<p class="muted">No notes yet. ` +
-      `<button id="genNotes" class="ghost">Write study notes</button></p>`;
-    const g = $("genNotes");
-    if (g) g.onclick = async () => {
-      g.disabled = true; g.textContent = "starting…";
-      await jpost(`/api/lecture/${encodeURIComponent(R.id)}/notes/regenerate`);
-      refreshLecture(false);
-    };
-  }
-
-  if (d.has_transcript && (!R.doc || first)) {
-    try {
-      const doc = await api(`/api/lecture/${encodeURIComponent(R.id)}/transcript`);
-      buildIndex(doc); renderTranscript(doc); drawTape();
-      $("durTime").textContent = fmt(doc.duration_ms / 1000);
-    } catch { /* still processing */ }
-  } else if (!d.has_transcript && !job) {
-    $("transcript").innerHTML =
-      `<p class="muted">No transcript yet. <button id="reproc" class="ghost">Process now</button></p>`;
-    const b = $("reproc");
-    if (b) b.onclick = async () => {
-      await jpost(`/api/lecture/${encodeURIComponent(R.id)}/process`);
-      refreshLecture(false);
-    };
-  }
+  await Promise.all([tDone, nDone, classRow, foldersP]);
 }
 
 /* ------------------------------------------------------------ folders */
-const L = { folders: [], lectures: [], sel: localStorage.getItem("lectern.folder") ?? "\u0000" };
+const L = { folders: [], lectures: [], status: null, appBytes: null, sel: localStorage.getItem("lectern.folder") ?? "\u0000" };
 // sel is "\u0000" for "All", "" for Unfiled, otherwise the folder name.
 const ALL = "\u0000";
 
-async function loadFolders() {
-  try { L.folders = (await api("/api/folders")).folders; } catch { L.folders = []; }
+function paintFolders() {
   const ul = $("folderList");
   ul.textContent = "";
   const rows = [{ key: ALL, label: "All lectures", icon: "\u25e6",
@@ -643,8 +677,13 @@ function folderOptions(selected, { withNew = false } = {}) {
   return opts.join("");
 }
 
-async function refreshFolders() {
-  try { L.folders = (await api("/api/folders")).folders; } catch { /* keep what we have */ }
+let foldersInflight = null;
+function refreshFolders() {
+  // Callers that overlap share one request.
+  foldersInflight = foldersInflight || (async () => {
+    try { L.folders = (await api("/api/folders")).folders; } catch { /* keep what we have */ }
+  })().finally(() => { foldersInflight = null; });
+  return foldersInflight;
 }
 
 // "biology 102126" -> BIO, "hist101226" -> History, "chem092826" -> chem.
@@ -826,9 +865,29 @@ function recheckWhilePending(view, pending, fn) {
 }
 
 let libSig = "";
+let storageTimer = 0;
+function renderStorageLine() {
+  const st = L.status;
+  if (!st) return;
+  const used = L.lectures.reduce((a, x) => a + (x.bytes || 0), 0);
+  const size = used >= 1e9 ? `${(used / 1e9).toFixed(1)} GB`
+             : used >= 1e6 ? `${(used / 1e6).toFixed(used < 1e7 ? 1 : 0)} MB`
+             : `${Math.max(1, Math.round(used / 1e3))} KB`;
+  // /api/storage walks the whole data folder, so it is never on the critical
+  // path: the lecture-only figure shows first, the app total replaces it.
+  const appLine = L.appBytes != null ? `Lectern uses ${bytesText(L.appBytes)}` : `${size} used`;
+  $("storageLine").textContent =
+    `${L.lectures.length} lecture${L.lectures.length === 1 ? "" : "s"} \u00b7 ${appLine}\n` +
+    `${(st.free_bytes / 1e9).toFixed(0)} GB free on this Mac`;
+}
+
 async function loadLibrary() {
-  try { L.lectures = (await api("/api/lectures")).lectures; } catch { return; }
-  await loadFolders();
+  const [lr, fr, sr] = await Promise.allSettled(
+    [api("/api/lectures"), api("/api/folders"), api("/api/status")]);
+  if (lr.status !== "fulfilled") return;
+  L.lectures = lr.value.lectures;
+  L.folders = fr.status === "fulfilled" ? fr.value.folders : [];
+  paintFolders();
   // Re-rendering replaces every card, which would close a Move or ⋯ menu the
   // user has open; skip it then (the next re-check catches up), and skip it
   // when nothing changed.
@@ -838,20 +897,14 @@ async function loadLibrary() {
     !$("library").classList.contains("hidden")
       && (menuOpen || L.lectures.some((l) => l.pending_folder != null)),
     loadLibrary);
-  try {
-    const s = await api("/api/status");
-    const used = L.lectures.reduce((a, x) => a + (x.bytes || 0), 0);
-    const size = used >= 1e9 ? `${(used / 1e9).toFixed(1)} GB`
-               : used >= 1e6 ? `${(used / 1e6).toFixed(used < 1e7 ? 1 : 0)} MB`
-               : `${Math.max(1, Math.round(used / 1e3))} KB`;
-    let appLine = `${size} used`;
-    try {
-      appLine = `Lectern uses ${bytesText((await api("/api/storage")).total_bytes)}`;
-    } catch { /* keep the lecture-only figure */ }
-    $("storageLine").textContent =
-      `${L.lectures.length} lecture${L.lectures.length === 1 ? "" : "s"} \u00b7 ${appLine}\n` +
-      `${(s.free_bytes / 1e9).toFixed(0)} GB free on this Mac`;
-  } catch { /* non-critical */ }
+  if (sr.status === "fulfilled") L.status = sr.value;   // else non-critical: keep the old line
+  renderStorageLine();
+  if (!storageTimer) {
+    storageTimer = setTimeout(async () => {
+      try { L.appBytes = (await api("/api/storage")).total_bytes; renderStorageLine(); }
+      catch { /* keep the lecture-only figure */ }
+    }, 2000);
+  }
 }
 
 function renderLibrary() {
@@ -1162,8 +1215,8 @@ $("stopBtn").onclick = async () => {
   try {
     const r = await jpost("/api/record/stop");
     toast("Recording saved. Transcribing now…", 4200);
-    await loadLibrary();
     openLecture(r.lecture_id);
+    loadLibrary();                      // in the background; the lecture opens now
   } catch (e) { toast(e.message || "Stop failed."); }
   finally { $("stopBtn").disabled = false; }
 };
@@ -1473,6 +1526,7 @@ async function loadStorage() {
   let r;
   try { r = await api("/api/storage"); }
   catch { box.replaceChildren(el("p", "hint", "Could not measure storage.")); return; }
+  L.appBytes = r.total_bytes; renderStorageLine();
   const disk = r.disk, pct = (b) => (100 * b / disk.total);
   const head = el("div", "st-head");
   head.append(el("b", "", `${bytesText(r.total_bytes)}`),
