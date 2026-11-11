@@ -20,3 +20,4 @@ redesign/
 # Lectern.app builds (packaging/macos/build_app.py)
 /build/
 /dist/
+bin/
