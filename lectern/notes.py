@@ -141,6 +141,17 @@ def _numbered(t: dict, sents: list[dict]) -> str:
     return "\n".join(f"[{s['sid']}] {sentence_text(t, s)}" for s in sents)
 
 
+def map_prompt(t: dict, ch: dict) -> tuple[str, list[int]]:
+    """The user message of one map call and the sentence ids it may cite.
+    premap.py builds its calls with this too: the same prompt shape, but over
+    the draft's text and sentence ids, so a cached result answers a close
+    question, not the identical one (premap.py says how it is re-checked)."""
+    sids = [s["sid"] for s in ch["sents"]]
+    user = (f"Lecture transcript, sentences {sids[0]} to {sids[-1]}:\n\n"
+            f"{_numbered(t, ch['sents'])}")
+    return user, sids
+
+
 # ------------------------------------------------------------------ schemas
 def _map_schema(sids: list[int]) -> dict:
     ids = sids[:MAX_ENUM]
@@ -242,8 +253,20 @@ introduce facts that are not there."""
 
 
 # -------------------------------------------------------------- generation
-def generate(t: dict, *, progress_cb=None) -> dict:
-    """Full pipeline. Falls back to extractive notes rather than failing."""
+class Cancelled(Exception):
+    """generate() was asked to stop (the pipeline's archive failed). Not a
+    notes failure: nothing is produced and nothing falls back."""
+
+
+def generate(t: dict, *, progress_cb=None, premapped: dict | None = None,
+             stats: dict | None = None, cancel=None) -> dict:
+    """Full pipeline. Falls back to extractive notes rather than failing.
+
+    premapped: map results computed during the recording (premap.py), reused
+    for the parts whose text still matches. stats: filled with per-part map
+    seconds, the reduce seconds and the reuse counts (never lecture text).
+    cancel: a threading.Event; set, the run stops between parts and raises
+    Cancelled."""
     mode = os.environ.get("LECTERN_NOTES", "auto").lower()
     if mode == "extractive":
         return extractive(t, reason="language model turned off")
@@ -270,7 +293,10 @@ def generate(t: dict, *, progress_cb=None) -> dict:
             return extractive(t, reason=f"not enough free memory for the "
                                         f"language model ({free // 2**20} MB free)")
     try:
-        return _generate_llm(t, progress_cb=progress_cb)
+        return _generate_llm(t, progress_cb=progress_cb, premapped=premapped,
+                             stats=stats, cancel=cancel)
+    except Cancelled:
+        raise
     except Exception as e:
         log.exception("LLM note generation failed; falling back")
         return extractive(t, reason=f"model error: {e}")
@@ -295,7 +321,40 @@ def _content_count(t: dict, sents: list[dict] | None = None) -> int:
     return len(toks)
 
 
-def _generate_llm(t: dict, *, progress_cb=None) -> dict:
+def _new_stats() -> dict:
+    return {"map_s": [], "reduce_s": None,
+            "premap": {"exact": 0, "fuzzy": 0, "cites_dropped": 0}}
+
+
+def _plan_reuse(t: dict, chunks: list[dict], need: list[bool],
+                premapped: dict | None) -> list[tuple | None]:
+    """Per part, a reusable pre-mapped result (premap.lookup: data, kind,
+    cites dropped) or None, decided up front so the time budget can count
+    only the parts the model will run."""
+    out: list[tuple | None] = [None] * len(chunks)
+    if not premapped:
+        return out
+    from . import premap
+    used: set = set()
+    for i, ch in enumerate(chunks):
+        if not need[i]:
+            continue
+        out[i] = premap.lookup(premapped, t, ch, used)
+    return out
+
+
+def _map_with_model(t: dict, ch: dict, stats: dict) -> dict | None:
+    user, sids = map_prompt(t, ch)
+    t0 = time.monotonic()
+    data = _call_with_repair(MAP_SYSTEM, user, _map_schema(sids), ch, t)
+    stats["map_s"].append(round(time.monotonic() - t0, 2))
+    return data
+
+
+def _generate_llm(t: dict, *, progress_cb=None, premapped: dict | None = None,
+                  stats: dict | None = None, cancel=None) -> dict:
+    stats = _new_stats() if stats is None else stats
+    stats.update(_new_stats())
     chunks = chunk(t)
     if not chunks:
         return extractive(t, reason="empty transcript")
@@ -307,27 +366,36 @@ def _generate_llm(t: dict, *, progress_cb=None) -> dict:
     vocab = anchor.transcript_vocab(t)
     sections: list[dict] = []
     terms: dict[str, dict] = {}
-    started = time.monotonic()
     ran = 0                           # chunks actually sent to the model
     cut_from_ms: int | None = None    # set when the time budget runs out
+    # Parts with content, and which of them a pre-mapped result answers.
+    need = [_content_count(t, ch["sents"]) >= MIN_CHUNK_CONTENT for ch in chunks]
+    reused = _plan_reuse(t, chunks, need, premapped)
+    started = time.monotonic()        # after planning: per-call time is model time
 
     for i, ch in enumerate(chunks):
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
         if progress_cb:
             progress_cb(i, len(chunks))
         if ran >= BUDGET_CHECK_AFTER:
             per = (time.monotonic() - started) / ran
-            if per * (len(chunks) - i) + (time.monotonic() - started) > NOTES_BUDGET_S:
+            left = sum(1 for j in range(i, len(chunks)) if need[j] and reused[j] is None)
+            if per * left + (time.monotonic() - started) > NOTES_BUDGET_S:
                 cut_from_ms = ch["t0"]
                 log.warning("model too slow here (%.0f s/part); finishing from "
                             "part %d with extractive notes", per, i + 1)
                 break
-        if _content_count(t, ch["sents"]) < MIN_CHUNK_CONTENT:
+        if not need[i]:
             continue                      # nothing taught here; the model would invent
         sids = [s["sid"] for s in ch["sents"]]
-        user = (f"Lecture transcript, sentences {sids[0]} to {sids[-1]}:\n\n"
-                f"{_numbered(t, ch['sents'])}")
-        data = _call_with_repair(MAP_SYSTEM, user, _map_schema(sids), ch, t)
-        ran += 1
+        if reused[i] is not None:
+            data, kind, dropped = reused[i]
+            stats["premap"][kind] += 1
+            stats["premap"]["cites_dropped"] += dropped
+        else:
+            data = _map_with_model(t, ch, stats)
+            ran += 1
         if not data:
             continue
 
@@ -391,11 +459,17 @@ def _generate_llm(t: dict, *, progress_cb=None) -> dict:
                 "quiz": [], "fallback": None}
 
     summary, quiz = "", []
+    if cancel is not None and cancel.is_set():
+        raise Cancelled()
     try:
         outline = "\n".join(
             f"## {s['heading']}\n" + "\n".join(f"- {b['text']}" for b in s["bullets"])
             for s in sections)[:6000]
-        red = _chat(REDUCE_SYSTEM, outline, _QUIZ_SCHEMA, num_predict=1100)
+        t0 = time.monotonic()
+        try:
+            red = _chat(REDUCE_SYSTEM, outline, _QUIZ_SCHEMA, num_predict=1100)
+        finally:
+            stats["reduce_s"] = round(time.monotonic() - t0, 2)
         summary = (red.get("summary") or "").strip()
         if summary and anchor.groundedness(summary, t, vocab) < SUMMARY_MIN_GROUNDED:
             log.info("dropped ungrounded summary: %s", summary)

@@ -32,7 +32,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import audio, capture, config, live, storage
+from . import audio, capture, config, live, premap, storage
 from . import pcm
 from . import platform_compat as pc
 from .storage import Lecture
@@ -778,6 +778,10 @@ def _live_begin(lecture_id: str) -> None:
         live.LIVE.begin(lecture_id)
     except Exception:
         log.exception("could not start the live transcriber")
+    try:
+        premap.PREMAP.begin(lecture_id)     # waits on the live draft; memory only
+    except Exception:
+        log.exception("could not start pre-mapping the notes")
 
 
 def self_pause_reason(lec: Lecture, log_offset: int | None = None) -> str | None:

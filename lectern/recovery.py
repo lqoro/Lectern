@@ -294,7 +294,8 @@ _DELETABLE_NAMES = ("master.wav", "master.wav.part", "concat.manifest.json",
                     "STOP",             # the portable writer's stop request
                     # live.py's draft and its scratch files (disposable)
                     "draft.json", "draft.raw.json", "live-seg.wav",
-                    "live.raw.json", "live.raw.fluidaudio.json")
+                    "live.raw.json", "live.raw.fluidaudio.json",
+                    "notes-premap.json")    # premap.py's cache (disposable)
 
 
 def _purge_work_dir(work: Path) -> int:

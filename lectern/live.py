@@ -71,6 +71,7 @@ SETTING = "live_transcribe"   # settings.json: true / false / absent (= automati
 RAW_NAME = "draft.raw.json"
 SEG_COPY_NAME = "live-seg.wav"
 ENGINE_PREFIX = "live.raw"
+PREMAP_NAME = "notes-premap.json"   # premap.py's cache; disposable like the draft
 
 
 # ------------------------------------------------------------- settings
@@ -102,8 +103,9 @@ def describe() -> dict:
 
 # ---------------------------------------------------------------- files
 def discard(lec: Lecture) -> None:
-    """Remove the draft and any live leftovers (the real transcript exists)."""
-    for name in (lec.draft_path.name, RAW_NAME, SEG_COPY_NAME,
+    """Remove the draft and any live leftovers (the real transcript exists),
+    including the notes pre-map cache built from the draft."""
+    for name in (lec.draft_path.name, RAW_NAME, SEG_COPY_NAME, PREMAP_NAME,
                  ENGINE_PREFIX + ".json", ENGINE_PREFIX + ".fluidaudio.json"):
         try:
             (lec.work / name).unlink(missing_ok=True)
@@ -237,6 +239,39 @@ class LiveTranscriber:
         _kill(proc)
         s.done.set()
         self._wake.set()          # let an idle worker notice and exit now
+
+    def premap_state(self, lecture_id: str) -> str:
+        """May notes pre-mapping (premap.py) use the machine for this
+        recording?
+          "go"    recording, live on and caught up, no live engine running;
+          "wait"  live is behind or busy, or capture just ended and it is not
+                  yet known whether that was a Pause or a Stop;
+          "end"   live switched itself off (or is off), or the lecture is
+                  paused: pre-mapping ends and may free the model;
+          "stop"  the pipeline is finishing this recording (finish()), or
+                  there is no live session: pre-mapping ends and the model
+                  stays loaded for the notes that follow."""
+        with self._lock:
+            s = self._sessions.get(lecture_id)
+            if s is None or s.closed or s.finishing:
+                return "stop"
+            if s.off:
+                return "end"
+            capturing = s.capturing
+            running = self._current is not None or not self._idle.is_set()
+            have = len(s.segments)
+        try:
+            lec = Lecture.load(lecture_id)
+        except (FileNotFoundError, ValueError):
+            return "end"
+        if not capturing:
+            # Pause marks the lecture "paused"; Stop leaves it to the pipeline.
+            return "end" if lec.manifest().get("state") == "paused" else "wait"
+        if running:
+            return "wait"
+        # The newest segment file is the one being written.
+        finished = max(0, len(list(lec.work.glob("seg-*.wav"))) - 1)
+        return "go" if have >= finished else "wait"
 
     def busy_any(self) -> bool:
         """A live engine is running, or some recording's draft still has work
