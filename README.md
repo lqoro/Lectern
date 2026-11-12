@@ -85,8 +85,11 @@ loopback-only by default.
 - Records from the built-in microphone, straight to disk, in 60-second chunks,
   through a small native helper (`lectern_capture.swift`, built automatically on
   first start) that keeps every sample.
-- Transcribes on the M1 GPU with whisper.cpp at roughly **7× real time** —
-  a 50-minute lecture takes about 7 minutes.
+- Transcribes on your Mac with a local speech model: Parakeet on Apple Silicon
+  with macOS 14 or later, Whisper elsewhere. Measured speeds are under
+  [Speech models](#speech-models-and-weak-computers).
+- Unreleased: Lectern can transcribe while you record, so a draft transcript is
+  ready when you press Stop, and a full pass then replaces it.
 - **Click any word in the transcript and the audio jumps to that moment.**
   Measured accuracy: 0 ms (playback starts 150 ms early on purpose, so you do
   not miss the first syllable of the word you clicked).
@@ -121,13 +124,31 @@ course videos.
 
 ## Speech models and weak computers
 
-Lectern picks a speech model to suit the machine (`GET /api/system`): the
-default `large-v3-turbo-q5_0` on Apple Silicon with 8 GB or more, `small.en` /
-`base.en` / `tiny.en` on CPU-only or low-memory machines. Models are looked up in
+Lectern recommends a speech model to suit the machine (`GET /api/system`). On
+Apple Silicon Macs with macOS 14 or later that is **Parakeet TDT 0.6B v3**.
+Whisper is recommended everywhere else, and stays available as a choice and as
+the fallback. The Whisper models are a `large-v3-turbo` build on Apple Silicon with
+8 GB or more, and `small.en` / `base.en` / `tiny.en` on CPU-only or low-memory
+machines. Models are looked up in
 `<support dir>/models/`, then the legacy `~/.localflow/models/`. Download one
 with `POST /api/models/download {"id": "base.en"}` (only ever on request) and
 choose it with `POST /api/models/select`. The CPU-only choices are heuristics,
 not benchmarks.
+
+Measured in November 2026 on one 10-minute lecture, warm runs:
+
+| Model | M1 Pro, 16 GB | M4, 16 GB | Word disagreement with Whisper large-v3 |
+|---|---|---|---|
+| Whisper large-v3-turbo q5_0 (Metal) | 27.5 s | 26 s | 7.2% |
+| Whisper turbo q4_0 with Core ML encoder | 34 s | 16–17 s | 8.5% |
+| Parakeet TDT 0.6B v3 | 3.6 s | 2.2 s | 9.8% |
+
+On a 66-minute lecture on the M1 Pro, Whisper large-v3-turbo q5_0 took 161 s and
+Parakeet took 29 s. The last column compares each model's words with Whisper
+large-v3 on that same lecture. It is one lecture, so treat it as indicative only.
+
+The first Parakeet run after install does a one-time Neural Engine compile of
+roughly 25 s. Lectern does this in the background after the model downloads.
 
 Whisper and the AAC encode run below normal priority so a lecture being
 recorded is never starved. If the notes model would not fit (under 5.5 GB RAM)
