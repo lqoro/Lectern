@@ -82,7 +82,6 @@ class Model:
     # `required` lists the paths (relative to MODELS_DIR) that must exist once it is unpacked.
     asset: str = ""
     required: tuple[str, ...] = ()
-    beta: bool = False
     apple_only: bool = False         # runs only on Apple Silicon (the Neural Engine)
     min_macos: int = 0
 
@@ -111,7 +110,7 @@ CATALOG: tuple[Model, ...] = (
     # the q5_0 file on Metal, 0.75 GB RAM; word agreement with the f16 model 99.5% (q5_0: 99.3%).
     # Both files are made by us (whisper-quantize, Core ML conversion), so they are hosted as one zip.
     Model("large-v3-turbo-q4_0", "ggml-large-v3-turbo-q4_0.bin", Q4_ZIP_MB, 760, 4,
-          "Balanced (default)", "Near-large accuracy, about 1.7 times faster than the compatible model "
+          "Balanced", "Near-large accuracy, about 1.7 times faster than the compatible model "
           "below. Uses the Neural Engine of Apple chips.",
           xrt_gpu=15.3, apple_only=True,
           asset="large-v3-turbo-q4_0-coreml.zip",
@@ -122,14 +121,15 @@ CATALOG: tuple[Model, ...] = (
           xrt_gpu=9.0, xrt_cpu=3.1,
           sha256="394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"),
     # NVIDIA Parakeet TDT 0.6B v3 (CC-BY-4.0), CoreML conversion by FluidInference, run by
-    # bin/fluidaudiocli on the Neural Engine. Apple Silicon and macOS 14+ only. Beta: measured on an
-    # M4 only (about 16x the old balanced model on real lectures, 0.4-1.1 GB RAM, 95-97% word
-    # agreement with it), never recommended automatically.
+    # bin/fluidaudiocli on the Neural Engine. Apple Silicon and macOS 14+ only. Recommended there
+    # when the engine is on disk (see recommend()). Measured 2026-11-11, 10 min of lecture, warm:
+    # M1 Pro 3.6 s / 0.16 GB, M4 2.2 s, against 26-34 s for the Whisper turbo builds; 9.8% word
+    # disagreement with Whisper large-v3 (turbo q5_0: 7.2%, q4_0: 8.5%).
     Model("parakeet-tdt-0.6b-v3-coreml", "parakeet-tdt-0.6b-v3-coreml", 555, 400, 4,
-          "Fastest (Parakeet)", "Beta. About 10 times faster than the default on an M4: a two-hour lecture "
-          "in about a minute. Similar accuracy for English, and it reads names and terms well.",
+          "Fastest (Parakeet)", "Several times faster than the Whisper models, with slightly more "
+          "mistakes. Uses the Neural Engine of Apple chips. Covers 25 European languages, English included.",
           xrt_gpu=153.0, xrt_cpu=0.0, asset="parakeet-tdt-0.6b-v3-coreml.zip",
-          required=("parakeet-tdt-0.6b-v3-coreml/config.json",), beta=True,
+          required=("parakeet-tdt-0.6b-v3-coreml/config.json",),
           apple_only=True, min_macos=14,
           sha256="dc345e55f08452b3cdefd23602b32f906322a6d95387249fafb5a97fd51a853b"),
     Model("small.en", "ggml-small.en-q5_1.bin", 190, 382, 3,
@@ -146,6 +146,7 @@ CATALOG: tuple[Model, ...] = (
           sha256="c77c5766f1cef09b6b7d47f21b546cbddd4157886b3b5d6d4f709e91e66c7c2b"),
 )
 BY_ID = {m.id: m for m in CATALOG}
+PARAKEET_ID = "parakeet-tdt-0.6b-v3-coreml"
 
 
 # --------------------------------------------------------------- settings
@@ -224,8 +225,23 @@ def needs_newer_macos(model: Model, hw: dict) -> bool:
             and bool(model.min_macos))
 
 
+def fluidaudio_present() -> bool:
+    """The Parakeet engine (fluidaudiocli) is an executable file on disk."""
+    cli = config.FLUIDAUDIO_CLI
+    return os.path.isfile(cli) and os.access(cli, os.X_OK)
+
+
 def recommend(hw: dict | None = None) -> Model:
+    """Parakeet on an Apple chip with macOS 14+ when its engine is there; Whisper otherwise."""
     hw = hw or hardware.snapshot()
+    pk = BY_ID[PARAKEET_ID]
+    if available(pk, hw) and fluidaudio_present():
+        return pk
+    return recommend_whisper(hw)
+
+
+def recommend_whisper(hw: dict) -> Model:
+    """The Whisper model that suits this machine; also the fallback when Parakeet cannot run."""
     ram_gb = effective_mb(hw) / 1024
     accel = hw.get("accelerator") or "cpu"
     cores = hw.get("cpu_cores") or 2
@@ -280,7 +296,11 @@ def recommend_why(m: Model, hw: dict) -> str:
     cores = hw.get("cpu_cores") or 0
     mins = minutes_per_hour(m, hw)
     took = f" An hour of lecture should take about {mins} min to transcribe." if mins else ""
-    if hw.get("accelerator") == "metal":
+    if m.id == PARAKEET_ID:
+        base = ("Apple chip with macOS 14 or later: Parakeet runs on the Neural Engine and is several "
+                "times faster than Whisper, though slightly less accurate. It covers 25 European "
+                "languages, English included. Whisper models stay available if you prefer them.")
+    elif hw.get("accelerator") == "metal":
         base = (f"Apple chip with {ram_gb} GB: enough for the balanced model, which uses the Neural Engine."
                 if m.id == "large-v3-turbo-q4_0" else
                 f"Apple chip with {ram_gb} GB: enough for the balanced model, which runs on the GPU."
@@ -300,8 +320,9 @@ def active() -> tuple[Path | None, Model | None, str]:
     """The model file to transcribe with, plus why it was chosen.
 
     Order: LECTERN_MODEL (an explicit file) -> the user's saved choice ->
-    the recommended model if installed -> the best installed model that fits
-    this machine -> the smallest installed model. None if nothing is installed.
+    the recommended model if installed -> the recommended Whisper model if installed (so a user
+    who has not downloaded Parakeet keeps the model they had) -> the best installed model that
+    fits this machine -> the smallest installed model. None if nothing is installed.
     """
     env = os.environ.get("LECTERN_MODEL")
     if env:
@@ -313,6 +334,8 @@ def active() -> tuple[Path | None, Model | None, str]:
     rec = recommend(hw)
     if p := installed_path(rec):
         return p, rec, "recommended for this computer"
+    if p := installed_path(wrec := recommend_whisper(hw)):
+        return p, wrec, "recommended for this computer"
     have = installed()
     ok = [m for m in have if fits(m, effective_mb(hw) * 2**20 or None)]
     if ok:
@@ -367,7 +390,6 @@ def describe() -> dict:
             "installed": installed_path(m) is not None,
             "fits": fits(m, total),
             "recommended": m.id == rec.id,
-            "beta": m.beta,
             "min_per_hour": minutes_per_hour(m, hw),
             "needs_macos": m.min_macos if needs_newer_macos(m, hw) else 0,
         } for m in CATALOG

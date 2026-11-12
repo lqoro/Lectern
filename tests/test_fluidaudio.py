@@ -112,8 +112,36 @@ class RunsParakeet(unittest.TestCase):
 
     def test_no_fallback_without_a_whisper_model(self):
         os.environ["FAKE_FAIL"] = "1"
+        with self.assertRaises(self.transcribe.TranscriptionError) as cm:
+            self.transcribe.run_with_fallback(self.wav, Path(self.tmp) / "w.raw")
+        msg = str(cm.exception)
+        self.assertTrue(msg.startswith("Parakeet could not transcribe"), msg)
+        self.assertIn("download a Whisper model in Settings", msg)
+        self.assertIn("fluidaudiocli exited 3", msg)                # the cause is kept for the log
+
+    def test_missing_engine_without_a_whisper_model_is_actionable(self):
+        self.transcribe.config.FLUIDAUDIO_CLI = str(Path(self.tmp) / "gone" / "fluidaudiocli")
+        with self.assertRaises(self.transcribe.TranscriptionError) as cm:
+            self.transcribe.run_with_fallback(self.wav, Path(self.tmp) / "w.raw")
+        msg = str(cm.exception)
+        self.assertIn("download a Whisper model in Settings", msg)
+        self.assertIn("fluidaudiocli is not installed", msg)
+        self.assertNotIn("brew install whisper-cpp", msg)           # that hint is for whisper-cli
+
+    def test_missing_engine_falls_back_once(self):
+        self.transcribe.config.FLUIDAUDIO_CLI = str(Path(self.tmp) / "gone" / "fluidaudiocli")
+        fake_model(self.models, self.models.BY_ID["small.en"])
+        calls = []
+        real = self.transcribe.run_whisper
+        def spy(wav, prefix, *, progress_cb=None, model=None):
+            calls.append(model)
+            if model is None:
+                return real(wav, prefix, progress_cb=progress_cb)
+            raise self.transcribe.TranscriptionError("whisper-cli exited 1")
+        self.transcribe.run_whisper = spy
         with self.assertRaises(self.transcribe.TranscriptionError):
             self.transcribe.run_with_fallback(self.wav, Path(self.tmp) / "w.raw")
+        self.assertEqual(len(calls), 2)                              # one try each, no loop
 
     def test_unexpected_json_shape_is_a_clear_error(self):
         src, dst = Path(self.tmp) / "x.json", Path(self.tmp) / "y.json"

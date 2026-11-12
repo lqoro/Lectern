@@ -74,9 +74,8 @@ class Selection(unittest.TestCase):
         self.assertEqual(r(16384, "cpu", 8), "large-v3-turbo-q5_0")
         self.assertEqual(r(8192, "cpu", 8), "small.en")
         self.assertEqual(r(8192, "cpu", 2), "base.en")
-        # Parakeet is a beta opt-in: never recommended, only offered on Apple chips with macOS 14+.
+        # Parakeet runs only on Apple chips with macOS 14+ (recommendation: see Parakeet below).
         pk = self.m.BY_ID["parakeet-tdt-0.6b-v3-coreml"]
-        self.assertTrue(pk.beta)
         hw = lambda accel, macos: {"accelerator": accel, "macos": macos}
         self.assertTrue(self.m.available(pk, hw("metal", "14.0")))
         self.assertTrue(self.m.available(pk, hw("metal", "26.1")))
@@ -109,6 +108,85 @@ class Selection(unittest.TestCase):
     def test_big_model_does_not_fit_small_machine(self):
         self.assertFalse(self.m.fits(self.m.BY_ID["large-v3-q5_0"], 4 * 2**30))
         self.assertTrue(self.m.fits(self.m.BY_ID["base.en"], 4 * 2**30))
+
+
+class Parakeet(unittest.TestCase):
+    """Parakeet v3 is recommended on Apple Silicon + macOS 14+ when its engine is on disk."""
+    PK = "parakeet-tdt-0.6b-v3-coreml"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.m = fresh_modules(self.tmp, LECTERN_MODEL_DIR=str(Path(self.tmp) / "models"))
+        self.m.LEGACY_DIR = Path(self.tmp) / "legacy"
+        self.m.BENCH_DIR = Path(self.tmp) / "bench"
+        cli = Path(self.tmp) / "fluidaudiocli"
+        cli.write_text("#!/bin/sh\n")
+        cli.chmod(0o755)
+        self.cli = str(cli)
+        self.m.config.FLUIDAUDIO_CLI = self.cli
+
+    def hw(self, accel="metal", macos="14.0", ram=16384):
+        return {"os": "Darwin", "accelerator": accel, "macos": macos, "ram_total_mb": ram,
+                "cpu_cores": 8}
+
+    def rec(self, **kw):
+        return self.m.recommend(self.hw(**kw)).id
+
+    def install_parakeet(self):
+        d = self.m.MODELS_DIR / self.PK
+        d.mkdir(parents=True)
+        (d / "config.json").write_text("{}")
+
+    def test_recommended_only_when_every_condition_holds(self):
+        self.assertEqual(self.rec(), self.PK)
+        self.assertEqual(self.rec(macos="26.1", ram=8192), self.PK)
+        self.assertEqual(self.rec(macos="13.6"), "large-v3-turbo-q4_0")     # macOS too old
+        self.assertEqual(self.rec(macos=""), "large-v3-turbo-q4_0")         # macOS unknown
+        self.assertEqual(self.rec(accel="cpu"), "large-v3-turbo-q5_0")      # not Apple Silicon
+        self.assertEqual(self.rec(accel="cuda"), "large-v3-turbo-q5_0")
+        self.m.config.FLUIDAUDIO_CLI = str(Path(self.tmp) / "missing" / "fluidaudiocli")
+        self.assertEqual(self.rec(), "large-v3-turbo-q4_0")                 # engine not on disk
+        self.m.config.FLUIDAUDIO_CLI = "fluidaudiocli"                      # bare name: not found
+        self.assertEqual(self.rec(), "large-v3-turbo-q4_0")
+
+    def test_no_beta_label_and_honest_why(self):
+        pk = self.m.BY_ID[self.PK]
+        self.assertNotIn("beta", pk.note.lower())
+        self.assertNotIn("beta", pk.label.lower())
+        why = self.m.recommend_why(pk, self.hw())
+        self.assertIn("faster", why)
+        self.assertIn("less accurate", why)
+        self.assertIn("25 European languages", why)
+        self.assertIn("25 European languages", pk.note)
+        head = why.split(" An hour of lecture")[0]           # the shared time estimate aside
+        self.assertNotRegex(head, r"\d+(\.\d+)?\s*(x|×|times|%|min|s)\b")
+
+    def test_saved_choice_is_never_switched(self):
+        self.m.hardware.snapshot = lambda: self.hw()
+        fake_model(self.m, self.m.BY_ID["large-v3-turbo-q5_0"])
+        self.install_parakeet()
+        self.m.save_settings(whisper_model="large-v3-turbo-q5_0")
+        self.assertEqual(self.m.recommend().id, self.PK)
+        p, cur, why = self.m.active()
+        self.assertEqual((cur.id, why), ("large-v3-turbo-q5_0", "your choice"))
+        d = self.m.describe()
+        self.assertEqual((d["recommended"], d["active"]["id"]), (self.PK, "large-v3-turbo-q5_0"))
+        self.assertEqual(self.m.load_settings()["whisper_model"], "large-v3-turbo-q5_0")
+
+    def test_automatic_user_keeps_the_whisper_model_they_run_until_parakeet_is_installed(self):
+        # No saved choice, the old recommendation (q4) installed beside a bigger model: the new
+        # recommendation (not downloaded) must not push them onto the bigger, slower one.
+        self.m.hardware.snapshot = lambda: self.hw()
+        q4 = self.m.BY_ID["large-v3-turbo-q4_0"]
+        for r in q4.required:
+            p = self.m.MODELS_DIR / r
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(b"x")
+        fake_model(self.m, self.m.BY_ID["large-v3-q5_0"])
+        self.assertEqual(self.m.active()[1].id, "large-v3-turbo-q4_0")
+        self.install_parakeet()                      # downloaded on purpose: now it is used
+        self.assertEqual(self.m.active()[1].id, self.PK)
 
 
 class Download(unittest.TestCase):

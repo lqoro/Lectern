@@ -72,6 +72,10 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | 
         raise TranscriptionError(f"model not found: {model}")
     out = Path(str(out_prefix) + ".json")
     coreml = model.is_dir()
+    if coreml and not models.fluidaudio_present():
+        # Checked here: through `nice` a missing program is only "exited 127", never FileNotFoundError.
+        raise TranscriptionError(f"fluidaudiocli is not installed (the Parakeet engine; looked for "
+                                 f"{config.FLUIDAUDIO_CLI})")
     if coreml:
         # Parakeet on the Neural Engine. No language or beam flags: v3 detects the language and
         # decodes greedily. Its own JSON is converted to whisper's shape below.
@@ -103,8 +107,8 @@ def run_whisper(wav: Path, out_prefix: Path, *, progress_cb=None, model: Path | 
                                 stderr=subprocess.PIPE, text=True, errors="replace",
                                 bufsize=1, **extra)
     except FileNotFoundError:
-        raise TranscriptionError(
-            f"{name} is not installed (for whisper-cli on a Mac: brew install whisper-cpp)") from None
+        hint = " (on a Mac: brew install whisper-cpp)" if not coreml else ""
+        raise TranscriptionError(f"{name} is not installed{hint}") from None
     if proc_cb:
         try:
             proc_cb(proc)
@@ -185,9 +189,14 @@ def run_with_fallback(wav: Path, out_prefix: Path, *, progress_cb=None) -> tuple
     try:
         return run_whisper(wav, out_prefix, progress_cb=progress_cb), models.active_name()
     except TranscriptionError as e:
-        spare = next((m for m in models.installed() if not m.is_folder), None)
-        if path is None or not path.is_dir() or spare is None:
+        if path is None or not path.is_dir():
             raise
+        spare = next((m for m in models.installed() if not m.is_folder), None)
+        if spare is None:
+            raise TranscriptionError(
+                "Parakeet could not transcribe this lecture and no Whisper model is installed to "
+                "fall back on. Please download a Whisper model in Settings, then press Process now."
+                f"\n\nDetails: {e}") from e
         log.warning("%s failed (%s); falling back to %s", model.id if model else path.name, e, spare.id)
         return run_whisper(wav, out_prefix, progress_cb=progress_cb,
                            model=models.installed_path(spare)), spare.id

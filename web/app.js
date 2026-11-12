@@ -1503,7 +1503,6 @@ async function loadSettings() {
     const main = el("div", "m-main");
     const name = el("div", "m-name", m.label);
     if (m.recommended) name.append(el("span", "tag", "recommended"));
-    if (m.beta) name.append(el("span", "tag", "beta"));
     if (m.id === s.active.id) name.append(el("span", "tag", "in use"));
     if (!m.fits) name.append(el("span", "tag", "may be too heavy here"));
     const eta = m.min_per_hour ? ` About ${m.min_per_hour} min per hour of lecture here.` : "";
@@ -1714,7 +1713,7 @@ async function fillModelBanner(kind) {
     if (kind === "first") {                         // first launch: let them choose what to download
       for (const m of sys.models.filter((x) => !x.installed && x.fits !== false)) {
         const eta = m.min_per_hour ? `, about ${m.min_per_hour} min per hour of lecture` : "";
-        const opt = el("option", "", `${m.label.replace(/\s*\(default\)$/, "")}${m.beta ? " (beta)" : ""} - ${mbText(m.size_mb)}${eta}`);
+        const opt = el("option", "", `${m.label.replace(/\s*\(default\)$/, "")} - ${mbText(m.size_mb)}${eta}`);
         opt.value = m.id;
         opt.selected = m.id === sys.recommended;
         pick.append(opt);
