@@ -331,6 +331,19 @@ class Robustness(Base):
 
 
 class Defaults(Base):
+    def test_state_says_on_or_off_and_why(self):
+        self.assertEqual(self.LIVE.state("none"), {"on": True, "off": None, "segments": 0})
+        self.live.set_enabled(False)
+        st = self.LIVE.state("none")
+        self.assertFalse(st["on"])
+        self.assertTrue(st["off"])
+        self.live.set_enabled(True)
+        s = self.LIVE._sessions["x"] = self.live._Session("x")
+        s.off = "too slow to keep up"
+        self.assertEqual(self.LIVE.state("x")["off"], "too slow to keep up")
+        self.assertFalse(self.LIVE.state("x")["on"])
+        del self.LIVE._sessions["x"]
+
     def test_off_by_default_on_small_memory(self):
         with mock.patch.object(self.pipeline.hardware, "effective_ram_bytes", lambda *a, **k: 8 * GB):
             self.assertFalse(self.live.enabled())

@@ -146,6 +146,8 @@ def favicon():
 @app.get("/api/status")
 def api_status():
     st = RECORDER.status()
+    if st.get("recording"):
+        st["live"] = live.LIVE.state(st["lecture_id"])
     st["free_bytes"] = storage.free_bytes()
     st["jobs"] = PIPELINE.jobs()
     # A first-run user has no speech model yet; the UI says so up front

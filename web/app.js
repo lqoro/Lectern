@@ -157,6 +157,17 @@ function setFollow(on) {
   $("jumpNow").classList.toggle("hidden", on);
 }
 
+// The note the lecture has reached: the last one whose moment is at or before now.
+function markNowNote(ms) {
+  let best = null;
+  for (const b of document.querySelectorAll("#notes .nb")) {
+    const t = +b.dataset.t;
+    if (t <= ms + 400 && (!best || t >= +best.dataset.t)) best = b;
+  }
+  for (const b of document.querySelectorAll("#notes .nb.now")) if (b !== best) b.classList.remove("now");
+  if (best) best.classList.add("now");
+}
+
 function paint(ms) {
   const wi = wordAt(ms);
   if (wi === R.activeWord) return;
@@ -166,6 +177,7 @@ function paint(ms) {
   if (si !== R.activeSent) {
     if (R.activeSent >= 0 && R.els[R.activeSent]) R.els[R.activeSent].classList.remove("active");
     R.activeSent = si;
+    markNowNote(ms);
     if (si >= 0 && R.els[si]) {
       R.els[si].classList.add("active");
       keepHot(si);
@@ -233,6 +245,8 @@ function loop() {
   R.raf = requestAnimationFrame(tick);
 }
 
+$("skipBack").onclick = () => { audio.currentTime = Math.max(0, audio.currentTime - 15); };
+$("skipFwd").onclick = () => { audio.currentTime = audio.currentTime + 15; };
 $("playBtn").onclick = () => (audio.paused ? audio.play().catch(() => {}) : audio.pause());
 $("seek").oninput = (e) => {
   const d = audio.duration || (R.doc ? R.doc.duration_ms / 1000 : 0);
@@ -278,6 +292,7 @@ function drawTape() {
 function moveTapeHead(frac) {
   const f = Math.max(0, Math.min(1, frac || 0));
   $("tapeHead").style.left = `${f * 100}%`;
+  $("tapeFill").style.width = `${f * 100}%`;
   // Bars already heard turn ink; only touch the ones that changed.
   const upto = Math.floor(f * TAPE.bins);
   if (upto === TAPE.heardTo) return;
@@ -364,6 +379,7 @@ function noteButton(b) {
   const txt = document.createElement("span");
   txt.textContent = b.text;
   el.append(t, txt);
+  el.dataset.t = b.t_ms;
   el.title = b.tier === "region"
     ? "Approximate — this note summarises a stretch of the lecture. Jumps to about here."
     : (b.preview ? `Jumps to: “${b.preview}”` : "Jumps to this moment");
@@ -454,11 +470,13 @@ function renderNotes(doc) {
 
 /* ------------------------------------------------------------ routing */
 function showLibrary() {
+  leaveRecording();
   $("reader").classList.add("hidden");
   $("library").classList.remove("hidden");
   $("backBtn").classList.add("hidden");
   $("player").classList.add("hidden");
   $("appTitle").textContent = "Lectern";
+  $("crumb").classList.add("hidden"); $("deviceTag").classList.add("hidden");
   audio.pause(); audio.removeAttribute("src"); audio.load();
   R.id = null; R.doc = null;
   location.hash = "";
@@ -466,6 +484,7 @@ function showLibrary() {
 }
 
 async function openLecture(id) {
+  leaveRecording();
   R.id = id;
   R.doc = null; R.notesKey = null; TAPE.notes = [];
   $("library").classList.add("hidden");
@@ -544,6 +563,9 @@ async function refreshLecture(first) {
   R.lastLecture = d;
   $("lecTitle").textContent = d.title;
   $("appTitle").textContent = d.folder || d.course || "Lectern";
+  $("crumb").classList.remove("hidden"); $("deviceTag").classList.remove("hidden");
+  $("crumbTitle").textContent = d.title;
+  $("lecDur").textContent = d.duration_ms ? fmt(d.duration_ms / 1000) : "";
   const bits = [];
   if (d.created_utc) bits.push(niceDate(d.created_utc));
   if (d.duration_ms) bits.push(fmt(d.duration_ms / 1000));
@@ -952,13 +974,29 @@ async function loadLibrary() {
       && (menuOpen || L.lectures.some((l) => l.pending_folder != null)),
     loadLibrary);
   if (sr.status === "fulfilled") L.status = sr.value;   // else non-critical: keep the old line
-  renderStorageLine();
+  renderStorageLine(); renderStorageBar();
   if (!storageTimer) {
     storageTimer = setTimeout(async () => {
-      try { L.appBytes = (await api("/api/storage")).total_bytes; renderStorageLine(); }
+      try { const sg = await api("/api/storage"); L.appBytes = sg.total_bytes; L.storageParts = sg.parts; renderStorageLine(); renderStorageBar(); }
       catch { /* keep the lecture-only figure */ }
     }, 2000);
   }
+}
+
+const STATE_LABEL = { importing: "Importing", concatenating: "Preparing", transcribing: "Transcribing",
+  noting: "Writing notes", archiving: "Saving" };
+
+// Storage bar under the list: only parts that have bytes; shares are of the shown parts.
+function renderStorageBar() {
+  const host = $("storageBar");
+  const parts = (L.storageParts || []).filter((p) => ["lectures", "speech", "notes"].includes(p.key) && p.bytes > 0);
+  const total = parts.reduce((a, p) => a + p.bytes, 0);
+  host.classList.toggle("hidden", !total);
+  if (!total) return;
+  host.innerHTML = `<div class="sb-track" role="img" aria-label="${parts.map((p) => `${p.label} ${bytesText(p.bytes)}`).join(", ")}">${
+    parts.map((p) => `<i class="sb-${p.key}" style="flex:${p.bytes}"></i>`).join("")}</div>
+    <ul class="sb-legend">${parts.map((p) =>
+      `<li><i class="sb-${p.key}"></i>${esc(p.label)} <span class="t">${bytesText(p.bytes)}</span></li>`).join("")}</ul>`;
 }
 
 function renderLibrary() {
@@ -981,7 +1019,7 @@ function renderLibrary() {
   const secs = list.reduce((a, l) => a + (l.duration_ms || 0) / 1000, 0);
   $("libTitle").textContent = L.sel === ALL ? "All lectures" : (L.sel || "Unfiled");
   $("libSub").textContent = list.length
-    ? `${list.length} lecture${list.length === 1 ? "" : "s"}${secs >= 60 ? `, ${hoursText(secs)} recorded` : ""}.`
+    ? `${list.length} lecture${list.length === 1 ? "" : "s"}${secs >= 60 ? ` \u00b7 ${hoursText(secs)}` : ""}`
     : "";
   for (const l of list) {
     const li = document.createElement("li");
@@ -991,7 +1029,7 @@ function renderLibrary() {
     li.innerHTML = `
       <div class="c-main">
         <div class="t1">${esc(l.title)}${
-          busy ? '<span class="badge work">Processing</span>' : ""}${
+
           l.state === "paused" ? `<span class="badge warn"${l.pause_reason ? ` title="${esc(l.pause_reason)}"` : ""}>Paused${
             l.pause_reason === "lid closed" ? ", lid closed" : ""}</span>` : ""}${
           l.recovered ? '<span class="badge warn">Recovered</span>' : ""}${
@@ -1001,7 +1039,7 @@ function renderLibrary() {
             esc(effFolder(l) || "Unfiled")}${l.pending_folder != null ? " (moving\u2026)" : ""}</button></div>
       </div>
       <div class="c-len">${l.duration_ms ? fmt(l.duration_ms / 1000) : '<span class="muted">\u2014</span>'}</div>
-      <div class="c-words">${l.words ? `${l.words.toLocaleString()} words` : ""}</div>
+      <div class="c-words${busy ? " work" : ""}"${l.words ? ` title="${l.words.toLocaleString()} words"` : ""}>${STATE_LABEL[l.state] || (l.has_notes ? "Notes ready" : l.has_transcript ? "Transcript ready" : "")}</div>
       <button class="more" data-more title="More" aria-label="More actions">\u22ef</button>`;
     li.onkeydown = (e) => { if (e.key === "Enter" && e.target === li) openLecture(l.id); };
     li.onclick = (e) => {
@@ -1258,6 +1296,7 @@ $("newForm").addEventListener("submit", async (e) => {
     await jpost("/api/record/start", { title, course: "", folder });
     try { localStorage.setItem("lectern.lastFolder", folder); } catch { /* private mode */ }
     toast("Recording. You can close this tab — it keeps going.", 5200);
+    showRecording();
     poll();
   } catch (err) {
     toast(err.message || "Could not start recording.", 6000);
@@ -1334,7 +1373,7 @@ async function commitRename() {
   inp.classList.add("hidden"); h.classList.remove("hidden");
   if (!title || title === h.textContent) return;
   const prev = h.textContent;
-  h.textContent = title;
+  h.textContent = title; $("crumbTitle").textContent = title;
   try {
     await api(`/api/lecture/${encodeURIComponent(R.id)}`, {
       method: "PATCH", headers: { "content-type": "application/json" },
@@ -1343,7 +1382,7 @@ async function commitRename() {
     toast("Renamed.");
     loadLibrary();
   } catch (e) {
-    h.textContent = prev;
+    h.textContent = prev; $("crumbTitle").textContent = prev;
     toast(e.message || "Could not rename.");
   }
 }
@@ -1418,6 +1457,143 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".dl-menu")) $("dlList").classList.add("hidden");
 });
 
+
+/* ------------------------------------------------------ recording view */
+// Timer, waveform and buttons come from /api/status (polled twice a second
+// while recording). The text is the live draft (the same file the lecture page
+// shows), re-read every few seconds: it only grows when a 60 s segment is
+// finished, so nothing here is ever made up. status.live says if it is on.
+const RV = { open: false, id: null, paused: false, N: 56, bars: [], doc: null, key: "", textT: 0, live: null };
+const hms = (s) => { s = Math.floor(s || 0); const p2 = (n) => String(n).padStart(2, "0");
+  return `${p2(Math.floor(s / 3600))}:${p2(Math.floor(s % 3600 / 60))}:${p2(s % 60)}`; };
+
+function buildWave() {
+  const w = $("rvWave");
+  if (w.childElementCount === RV.N) return;
+  w.replaceChildren(...Array.from({ length: RV.N }, () => document.createElement("i")));
+}
+function paintWave() {
+  const els = $("rvWave").children, n = RV.bars.length;
+  for (let i = 0; i < RV.N; i++) {
+    const v = RV.bars[i - (RV.N - n)];          // newest bar at the right edge
+    const el = els[i];
+    el.className = v === undefined ? "idle" : (i < RV.N * 0.12 ? "old" : "");
+    el.style.transform = `scaleY(${v === undefined ? 0.08 : Math.max(0.08, v)})`;
+  }
+}
+
+function showRecording() {
+  if (RV.open) return;
+  RV.open = true; RV.since = Date.now(); RV.id = null; RV.paused = false; RV.bars = []; RV.doc = null; RV.key = "";
+  for (const id of ["library", "reader", "player"]) $(id).classList.add("hidden");
+  $("recording").classList.remove("hidden");
+  $("backBtn").classList.remove("hidden");
+  $("appTitle").textContent = "Lectern";
+  $("crumb").classList.remove("hidden"); $("deviceTag").classList.remove("hidden");
+  $("crumbTitle").textContent = "New recording";
+  R.id = null; R.doc = null;
+  location.hash = "#/rec";
+  buildWave(); paintWave(); paintRecLine(); paintRecText();
+  $("recPill").classList.add("hidden");
+}
+function leaveRecording() {
+  if (!RV.open) return;
+  RV.open = false; clearTimeout(RV.textT);
+  $("recording").classList.add("hidden");
+  if (recActive) $("recPill").classList.remove("hidden");
+}
+
+function paintRecLine() {
+  const l = RV.live;
+  $("rvLine").textContent = RV.paused
+    ? "Paused. The microphone is off and nothing has been lost."
+    : !l ? "Recording."
+    : l.on ? "Transcribing as you record. The full transcript is made when you stop."
+    : l.off && l.off !== "off" ? "Live text switched itself off so recording stays smooth. The full transcript is made when you stop."
+    : "Live text is off on this Mac. The full transcript is made when you stop.";
+}
+
+function paintRecText() {
+  const host = $("rvText"), d = RV.doc, l = RV.live;
+  const sents = d && d.sents ? d.sents.slice(-6) : [];
+  const key = sents.length + ":" + (d ? d.words.w.length : 0) + ":" + (l ? l.on : "");
+  if (key === RV.key) return;
+  RV.key = key;
+  host.textContent = "";
+  if (!sents.length) {
+    const p = document.createElement("p"); p.className = "rv-note";
+    p.textContent = l && !l.on ? "Live text is off." : "Text appears here after the first minute of speech has been transcribed.";
+    host.appendChild(p); return;
+  }
+  sents.forEach((s, i) => {
+    const p = document.createElement("p");
+    const t = d.words.w.slice(s.w0, s.w0 + s.wn).join(" ");
+    if (i === sents.length - 1) { const m = document.createElement("mark"); m.textContent = t; p.appendChild(m); }
+    else p.textContent = t;
+    host.appendChild(p);
+  });
+}
+
+async function refreshRecText() {
+  clearTimeout(RV.textT);
+  if (!RV.open) return;
+  const id = RV.id, l = RV.live;
+  if (id && l && (l.on || l.segments > 0)) {
+    try {
+      const doc = await api(`/api/lecture/${encodeURIComponent(id)}/transcript`);
+      if (RV.open && RV.id === id && doc && doc.words) { RV.doc = doc; paintRecText(); }
+    } catch { /* 404 = no segment finished yet */ }
+  } else paintRecText();
+  if (RV.open) RV.textT = setTimeout(refreshRecText, DRAFT_POLL_MS);
+}
+
+// Called from poll() with every status.
+function updateRecView(s) {
+  if (!RV.open) return;
+  if (s.recording) {
+    const first = RV.id !== s.lecture_id;
+    RV.id = s.lecture_id; RV.paused = false; RV.live = s.live || null;
+    $("rvClock").textContent = hms(s.elapsed_s);
+    RV.bars.push(Math.min(1, (s.level ?? 0) * 1.6));
+    if (RV.bars.length > RV.N) RV.bars.shift();
+    paintWave();
+    $("appTitle").textContent = (L.lectures.find((x) => x.id === s.lecture_id) || {}).folder || "Lectern";
+    $("crumbTitle").textContent = s.title || "New recording";
+    $("rvHead").textContent = "Recording lecture";
+    $("rvPause").lastElementChild.textContent = "Pause";
+    if (first) refreshRecText();
+  } else if (!RV.id) {
+    if (Date.now() - RV.since > 3000) showLibrary();     // opened from a stale #/rec link
+  } else {
+    RV.paused = true;
+    $("rvHead").textContent = "Recording paused";
+    $("rvPause").lastElementChild.textContent = "Continue";
+    RV.bars = []; paintWave();
+  }
+  paintRecLine();
+}
+
+$("recOpen").onclick = showRecording;
+$("rvPause").onclick = async () => {
+  const b = $("rvPause"); b.disabled = true;
+  try {
+    if (RV.paused) { await jpost("/api/record/resume", { lecture_id: RV.id }); poll(); }
+    else { await jpost("/api/record/pause"); RV.paused = true; poll(); }
+  } catch (e) { toast(e.message || "Could not change the recording.", 6000); }
+  finally { b.disabled = false; }
+};
+$("rvStop").onclick = async () => {
+  const b = $("rvStop"); b.disabled = true;
+  try {
+    const id = RV.id;
+    const r = RV.paused ? (await jpost(`/api/lecture/${encodeURIComponent(id)}/process`), { lecture_id: id })
+                        : await jpost("/api/record/stop");
+    toast("Recording saved. Transcribing now…", 4200);
+    openLecture(r.lecture_id); loadLibrary();
+  } catch (e) { toast(e.message || "Stop failed."); }
+  finally { b.disabled = false; }
+};
+
 let recWasActive = false, recActive = false, recLectureId = null;
 let lastStopSeen = null;
 let bannerShown = "", bannerRec = null;   // "" | "first" (no model yet) | "upgrade" (a faster model exists)
@@ -1438,15 +1614,17 @@ async function poll() {
   recLectureId = s.lecture_id || null;
   if (s.recording) {
     recWasActive = true;
-    pill.classList.remove("hidden");
+    pill.classList.toggle("hidden", RV.open);
     $("newBtn").classList.add("hidden");
     $("recTime").textContent = clock(s.elapsed_s);
     $("meterFill").style.width = `${Math.round(Math.min(1, (s.level ?? 0) * 1.6) * 100)}%`;
     if (s.stalled) toast("The microphone stopped sending audio.", 5000);
+    updateRecView(s);
     setTimeout(poll, 500);
   } else {
     pill.classList.add("hidden");
     $("newBtn").classList.remove("hidden");
+    updateRecView(s);
     const ls = s.last_stop;
     if (ls && ls.paused && ls.at !== lastStopSeen && recWasActive) {
       const why = ls.reason === "lid closed" ? "the laptop lid was closed"
@@ -1467,7 +1645,9 @@ const OPEN_SETTINGS = location.hash === "#settings";   // the menu bar's "Change
 requireNotice();                         // first launch: show the notice right away
 (function start() {
   const m = location.hash.match(/^#\/l\/(.+)$/);
-  if (m) { openLecture(decodeURIComponent(m[1])); loadLibrary(); } else showLibrary();
+  if (m) { openLecture(decodeURIComponent(m[1])); loadLibrary(); }
+  else if (location.hash === "#/rec") { showRecording(); loadLibrary(); }
+  else showLibrary();
   poll();
   maybeShowWhatsNew();
 })();

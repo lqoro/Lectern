@@ -6,7 +6,7 @@
 <title>Lectern</title>
 <link rel="stylesheet" href="/web/app.css">
 <link rel="manifest" href="/web/manifest.webmanifest">
-<meta name="theme-color" content="#3b6ef5">
+<meta name="theme-color" content="#1F5C45">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Lectern">
@@ -32,11 +32,12 @@
 <header class="bar">
   <button id="menuBtn" class="icon-btn menu-btn" aria-label="Show classes" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg></button>
   <button id="backBtn" class="icon-btn hidden" title="Back to library" aria-label="Back to library"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg></button>
-  <h1 id="appTitle">Lectern</h1>
+  <h1><span id="appTitle">Lectern</span><span id="crumb" class="crumb hidden"><b aria-hidden="true">›</b><span id="crumbTitle"></span></span></h1>
+  <span id="deviceTag" class="device-tag hidden" title="Audio, transcripts and notes stay on this computer">On-device</span>
   <div class="grow"></div>
   <div id="recPill" class="pill hidden" role="status">
     <span class="dot"></span>
-    <span id="recTime">00:00</span>
+    <button id="recOpen" class="rec-open" title="Open the recording view" aria-label="Open the recording view"><span id="recTime">00:00</span></button>
     <span class="meter" aria-hidden="true"><i id="meterFill"></i></span>
     <button id="pauseBtn" class="ghost" title="Pause: resume any time, nothing is lost">Pause</button>
     <button id="stopBtn" class="danger">Stop</button>
@@ -65,6 +66,26 @@
         <p>Press <b>Record a lecture</b> when class starts, or import a recording you already have. Everything stays on this computer.</p>
       </div>
       <ul id="lectureList" class="cards"></ul>
+      <div id="storageBar" class="libstore hidden" aria-label="Storage used by Lectern"></div>
+    </div>
+  </section>
+
+  <!-- RECORDING -->
+  <section id="recording" class="view hidden" aria-labelledby="rvHead">
+    <div class="rv">
+      <h2 id="rvHead">Recording lecture</h2>
+      <div class="rv-row">
+        <div id="rvClock" class="rv-clock" role="timer" aria-label="Time recorded">00:00:00</div>
+        <div id="rvWave" class="rv-wave" aria-hidden="true"></div>
+        <div class="rv-btns">
+          <button id="rvPause" class="rv-btn"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 3h2.4v10H4.5zM9.1 3h2.4v10H9.1z"/></svg><span>Pause</span></button>
+          <button id="rvStop" class="rv-btn rv-stop"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4h8v8H4z"/></svg><span>Stop</span></button>
+        </div>
+      </div>
+      <p id="rvLine" class="rv-line"></p>
+      <h3 class="rv-label">Live transcript</h3>
+      <div id="rvText" class="rv-text" aria-live="polite"></div>
+      <p class="rv-foot"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="m5.2 8.2 2 2 3.6-4"/></svg>Recording is saved every few seconds, so a crash can&rsquo;t lose it.</p>
     </div>
   </section>
 
@@ -74,6 +95,7 @@
       <div class="title-row">
         <h2 id="lecTitle">…</h2>
         <input id="lecTitleEdit" class="title-edit hidden">
+        <span id="lecDur" class="lec-dur t"></span>
         <button id="renameBtn" class="icon-btn" title="Rename" aria-label="Rename"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m10.5 2.5 3 3L6 13H3v-3z"/></svg></button>
         <div class="grow"></div>
         <div class="dl-menu">
@@ -100,23 +122,6 @@
       <div class="bar-track"><i id="jobFill"></i></div>
       <p class="hint" id="jobHint"></p>
     </div>
-    <div id="player" class="player hidden">
-      <button id="playBtn" class="play" aria-label="Play">▶</button>
-      <p class="clock"><span id="curTime" class="t">0:00</span> <span class="of">/ <span id="durTime" class="t">0:00</span></span></p>
-      <select id="rate" title="Playback speed (keys: [ slower, ] faster, \ normal)" aria-label="Playback speed">
-        <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
-        <option value="1">1×</option><option value="1.25">1.25×</option>
-        <option value="1.5">1.5×</option><option value="1.75">1.75×</option>
-        <option value="2">2×</option>
-      </select>
-      <div class="tape" id="tape">
-        <svg id="tapeSvg" preserveAspectRatio="none" aria-hidden="true"></svg>
-        <i id="tapeHead" class="tape-head"></i>
-        <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position in lecture">
-        <div id="tapeScale" class="tape-scale" aria-hidden="true"></div>
-      </div>
-      <audio id="audio" preload="metadata"></audio>
-    </div>
     <div class="tabs" id="paneTabs">
       <button data-tab="notes" class="on">Notes</button>
       <button data-tab="transcript">Transcript</button>
@@ -132,12 +137,32 @@
       <div class="pane transcript-pane" tabindex="0">
         <div class="pane-head">
           <h3>Transcript</h3>
-          <button id="jumpNow" class="tiny hidden" title="Scroll back to what is playing and follow along">Jump to current</button>
           <label class="follow"><input type="checkbox" id="followChk" role="switch" checked> Follow audio</label>
         </div>
         <p id="draftNote" class="draft-note hidden" role="status"></p>
         <div id="transcript" class="transcript"></div>
+        <button id="jumpNow" class="jump hidden" title="Scroll back to what is playing and follow along"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 4l4 4-4 4"/></svg>Jump to current</button>
       </div>
+    </div>
+    <div id="player" class="player hidden">
+      <button id="playBtn" class="play" aria-label="Play">▶</button>
+      <button id="skipBack" class="skip" aria-label="Back 15 seconds" title="Back 15 seconds"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5a7.5 7.5 0 1 1-7.4 6.3M12 5V2m0 3 3-3"/></svg><span>15</span></button>
+      <button id="skipFwd" class="skip" aria-label="Forward 15 seconds" title="Forward 15 seconds"><svg viewBox="0 0 24 24" aria-hidden="true" style="transform:scaleX(-1)"><path d="M12 5a7.5 7.5 0 1 1-7.4 6.3M12 5V2m0 3 3-3"/></svg><span>15</span></button>
+      <div class="tape" id="tape">
+        <svg id="tapeSvg" preserveAspectRatio="none" aria-hidden="true"></svg>
+        <i id="tapeFill" class="tape-fill"></i>
+        <i id="tapeHead" class="tape-head"></i>
+        <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Position in lecture">
+        <div id="tapeScale" class="tape-scale" aria-hidden="true"></div>
+      </div>
+      <p class="clock"><span id="curTime" class="t">0:00</span> <span class="of">/ <span id="durTime" class="t">0:00</span></span></p>
+      <select id="rate" title="Playback speed (keys: [ slower, ] faster, \ normal)" aria-label="Playback speed">
+        <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
+        <option value="1">1×</option><option value="1.25">1.25×</option>
+        <option value="1.5">1.5×</option><option value="1.75">1.75×</option>
+        <option value="2">2×</option>
+      </select>
+      <audio id="audio" preload="metadata"></audio>
     </div>
   </section>
 </main>

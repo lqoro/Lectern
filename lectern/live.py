@@ -240,6 +240,17 @@ class LiveTranscriber:
         s.done.set()
         self._wake.set()          # let an idle worker notice and exit now
 
+    def state(self, lecture_id: str) -> dict:
+        """What the Recording view says about live text: on, or off and why.
+        Memory only (the status poll calls it twice a second)."""
+        with self._lock:
+            s = self._sessions.get(lecture_id)
+            off = s.off if s else None
+            n = len(s.segments) if s else 0
+        on = enabled() and not off
+        why = off or (None if on else "off")
+        return {"on": on, "off": why, "segments": n}
+
     def premap_state(self, lecture_id: str) -> str:
         """May notes pre-mapping (premap.py) use the machine for this
         recording?
