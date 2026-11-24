@@ -139,6 +139,55 @@ class Resume(Base):
             self.assertIsNone(self.recorder.Recorder._resume_device(lec, "paused"))
 
 
+class ResumeSource(Base):
+    """A finished lecture has no recording.json (.work is gone), so the source
+    lives on the manifest. It must win over the saved default."""
+
+    def resume_device(self, default=None, **manifest):
+        lec = self.storage.Lecture.create("Done", state="complete")   # before "being a Mac"
+        if manifest:
+            lec.update(**manifest)
+        if default:
+            self.models.save_settings(record_source=default)
+        p = mock.patch.object(self.audio, "system_audio_supported", lambda: True)
+        p.start(); self.addCleanup(p.stop)     # not "IS_MAC": that also switches fsync to macOS-only calls
+        got = {}
+        mic = self.audio.Device(0, "USB Mic")
+        rec = self.recorder.Recorder()
+        with mock.patch.object(self.recorder, "_require_capture_helper", lambda *a, **k: None), \
+             mock.patch.object(self.recorder.audio, "resolve_device", lambda fresh=False: mic), \
+             mock.patch.object(self.recorder.audio, "probe", lambda d: got.update(probed=d)), \
+             mock.patch.object(self.recorder.Recorder, "_seed_from_archive_if_needed", staticmethod(lambda l: 0)), \
+             mock.patch.object(self.recorder.Recorder, "_spawn",
+                               lambda self_, l, d, start_number=0: got.update(device=d) or (mock.Mock(), 0)), \
+             mock.patch.object(self.recorder.Recorder, "_track", lambda *a, **k: {}):
+            rec.resume(lec.id)
+        return got["device"]
+
+    def test_finished_system_lecture_resumes_as_system_even_if_default_is_mic(self):
+        d = self.resume_device(capture_source="system")
+        self.assertEqual(self.audio.default_source(), "mic")
+        self.assertTrue(self.audio.is_system(d))
+
+    def test_finished_mic_lecture_stays_mic_even_if_default_is_system(self):
+        self.assertEqual(self.resume_device("system", capture_source="mic").name, "USB Mic")
+
+    def test_imports_and_old_lectures_count_as_microphone(self):
+        # an imported lecture keeps a dict under "source"; it must not be read as ours
+        self.assertEqual(self.resume_device("system", source={"kind": "import", "filename": "a.mp4"}).name, "USB Mic")
+
+    def test_start_records_the_source_on_the_lecture(self):
+        lec = self.storage.Lecture.create("S")
+        with mock.patch.object(self.recorder.Recorder, "_argv", lambda *a, **k: ["true"]), \
+             mock.patch.object(self.recorder.subprocess, "Popen", return_value=mock.Mock(pid=1)):
+            self.recorder.Recorder()._spawn(lec, self.audio.SYSTEM_DEVICE)
+        self.assertEqual(lec.manifest()["capture_source"], "system")
+        with mock.patch.object(self.recorder.Recorder, "_argv", lambda *a, **k: ["true"]), \
+             mock.patch.object(self.recorder.subprocess, "Popen", return_value=mock.Mock(pid=1)):
+            self.recorder.Recorder()._spawn(lec, self.audio.Device(0, "USB Mic"))
+        self.assertEqual(lec.manifest()["capture_source"], "mic")
+
+
 class Probe(Base):
     def test_silence_is_ok_for_system_audio_but_a_denied_permission_is_not(self):
         import subprocess, wave

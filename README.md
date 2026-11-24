@@ -94,11 +94,12 @@ default (and what the quick-record key uses), set **Settings (⚙) ▸ Record fr
   (Lectern records the *sound only* — no picture is captured or kept). Allow
   whichever app starts Lectern (Terminal, or Lectern), then start Lectern again.
 - It records **everything** the Mac plays — notification dings and messages
-  included — so close what you do not want in the recording. Lectern's own sound
-  is left out. Check **Recording notice** in `TERMS.md` before recording a call.
+  included — so close what you do not want in the recording. That includes Lectern's own
+  playback: do not replay a lecture while recording. Check **Recording notice** in `TERMS.md` before recording a call.
 - A paused video (or a quiet moment) is recorded as silence, so the transcript
   clicks still land on the right second. It is not mistaken for a dead microphone.
-- Continue/resume goes back to the same source the lecture started with.
+- **Continue recording** always goes back to the source the lecture started with,
+  even for a finished lecture; older lectures and imports count as microphone.
 - Set the default back to *Microphone* before a real classroom: a quick-record
   key set to "This Mac's sound" would record silence.
 
