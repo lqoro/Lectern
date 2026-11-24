@@ -74,9 +74,32 @@ It prints a link containing an access key. Open it on the phone, then
 mode is on, anything on the network can reach the port, so it is token-gated and
 loopback-only by default.
 
+## Record this Mac's sound (YouTube, Zoom, any app)
+
+Watching a lecture on YouTube, a recorded Panopto/Canvas video, or a Zoom class?
+Record what the Mac is *playing* instead of what the microphone hears — no room
+noise, no echo, the cleanest audio possible, and it works for every app.
+
+In **New recording**, change **Record** to *This Mac's sound*. To make it the
+default (and what the quick-record key uses), set **Settings (⚙) ▸ Record from**.
+
+- Needs **macOS 13 or newer**. Windows and Linux keep the microphone only.
+- macOS asks for **Screen & System Audio Recording** permission the first time
+  (Lectern records the *sound only* — no picture is captured or kept). Allow
+  whichever app starts Lectern (Terminal, or Lectern), then start Lectern again.
+- It records **everything** the Mac plays — notification dings and messages
+  included — so close what you do not want in the recording. That includes Lectern's own
+  playback: do not replay a lecture while recording. Check **Recording notice** in `TERMS.md` before recording a call.
+- A paused video (or a quiet moment) is recorded as silence, so the transcript
+  clicks still land on the right second. It is not mistaken for a dead microphone.
+- **Continue recording** always goes back to the source the lecture started with,
+  even for a finished lecture; older lectures and imports count as microphone.
+- Set the default back to *Microphone* before a real classroom: a quick-record
+  key set to "This Mac's sound" would record silence.
+
 ## What it does today
 
-- Records from the built-in microphone, straight to disk, in 60-second chunks,
+- Records from the built-in microphone — or the Mac's own sound — straight to disk, in 60-second chunks,
   through a small native helper (`lectern_capture.swift`, built automatically on
   first start) that keeps every sample.
 - Transcribes on the M1 GPU with whisper.cpp at roughly **7× real time** —
@@ -187,7 +210,7 @@ lectern/
 ├── lectern/
 │   ├── config.py        every path and tunable
 │   ├── audio.py         device resolution by name + mic preflight
-│   ├── lectern_capture.swift  native mic capture (replaces ffmpeg avfoundation)
+│   ├── lectern_capture.swift  native capture: mic, or system audio via ScreenCaptureKit (replaces ffmpeg avfoundation)
 │   ├── capture.py       builds/locates that helper
 │   ├── capture_py.py    portable recorder (Windows/Linux; PortAudio)
 │   ├── platform_compat.py  every macOS/Windows/Linux difference in one place

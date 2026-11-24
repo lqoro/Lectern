@@ -24,6 +24,15 @@
 //     advanced, so a vanished device still shows up as a stall
 //   * SIGINT/SIGTERM patch the open segment's header and exit 0
 //   * ignores SIGPIPE: it must outlive the backend that reads its stdout
+//   * --source system records everything the Mac is playing (YouTube, Zoom,
+//     any app) instead of the microphone, through ScreenCaptureKit (macOS 13+;
+//     needs the Screen Recording permission, audio only -- no video is kept).
+//     The audio never goes through the speakers or a mic, so it is the cleanest
+//     copy there is. Same segment files, same progress lines, same sleep
+//     handling. A Mac that is playing nothing delivers no audio at all, so
+//     silence is written for those stretches: the file stays on wall-clock
+//     time (click-to-jump depends on that) and the backend does not mistake a
+//     paused video for a dead microphone.
 //   * before the Mac sleeps, and (with --pause-on-lid) when the lid closes, it
 //     closes the segment, releases the mic, prints `event=sleep` or
 //     `event=lid-closed`, logs "stopped (system sleep|lid closed)" and exits
@@ -32,9 +41,11 @@
 //     SIGUSR1 takes the lid-closed path, so that path can be tested without
 //     shutting the laptop.
 import AVFoundation
+import CoreGraphics
 import Foundation
 import IOKit
 import IOKit.pwr_mgt
+import ScreenCaptureKit
 
 let OUT_RATE = 16000.0
 setvbuf(stdout, nil, _IONBF, 0)
@@ -50,6 +61,7 @@ func emit(_ s: String) {           // stdout may be a dead pipe; never let that 
 
 // ------------------------------------------------------------------ args
 var deviceName: String? = nil
+var source = "mic"
 var pattern = ""
 var segmentSeconds = 60
 var startNumber = 0
@@ -60,6 +72,7 @@ do {
     while let a = it.next() {
         switch a {
         case "--device": deviceName = it.next()
+        case "--source": source = it.next() ?? ""
         case "--out": pattern = it.next() ?? ""
         case "--segment-seconds": segmentSeconds = Int(it.next() ?? "") ?? 60
         case "--start-number": startNumber = Int(it.next() ?? "") ?? 0
@@ -68,8 +81,8 @@ do {
         default: log("unknown argument \(a)"); exit(2)
         }
     }
-    if pattern.isEmpty || !pattern.contains("%") {
-        log("usage: lectern-capture --out /dir/seg-%06d.wav [--device NAME] "
+    if pattern.isEmpty || !pattern.contains("%") || !(source == "mic" || source == "system") {
+        log("usage: lectern-capture --out /dir/seg-%06d.wav [--source mic|system] [--device NAME] "
             + "[--segment-seconds 60] [--start-number N] [--duration S] [--pause-on-lid]")
         exit(2)
     }
@@ -171,15 +184,37 @@ final class Capture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         self.io = io
     }
 
+    // Only touched on `io`: when audio last reached the file (wall clock).
+    var lastWriteAt = DispatchTime.now()
+
     private func hand(_ p: UnsafePointer<Int16>, _ count: Int) {
         let copy = Array(UnsafeBufferPointer(start: p, count: count))
         framesIn += Int64(count)
-        io.async { self.writer.write(copy) }
+        io.async {
+            self.lastWriteAt = DispatchTime.now()
+            self.writer.write(copy)
+        }
+    }
+
+    /// System source only, on `io` (the ticker): when no audio has arrived for
+    /// half a second, write silence for the time that has passed.
+    func padSilenceIfIdle() {
+        let now = DispatchTime.now()
+        let idle = Double(now.uptimeNanoseconds &- lastWriteAt.uptimeNanoseconds) / 1e9
+        guard idle >= 0.5 else { return }
+        let frames = Int(idle * OUT_RATE)
+        lastWriteAt = now
+        writer.write([Int16](repeating: 0, count: frames))
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
-        guard let fd = CMSampleBufferGetFormatDescription(sb),
+        handle(sb)
+    }
+
+    func handle(_ sb: CMSampleBuffer) {
+        guard CMSampleBufferIsValid(sb), CMSampleBufferDataIsReady(sb),
+              let fd = CMSampleBufferGetFormatDescription(sb),
               let asbdP = CMAudioFormatDescriptionGetStreamBasicDescription(fd) else { return }
         let asbd = asbdP.pointee
         let n = CMSampleBufferGetNumSamples(sb)
@@ -259,22 +294,21 @@ final class Capture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     }
 }
 
-// ----------------------------------------------------------- permission
-switch AVCaptureDevice.authorizationStatus(for: .audio) {
-case .authorized: break
-case .notDetermined:
-    let sem = DispatchSemaphore(value: 0)
-    var ok = false
-    AVCaptureDevice.requestAccess(for: .audio) { ok = $0; sem.signal() }
-    sem.wait()
-    if !ok { log("Operation not permitted: microphone access was denied"); exit(3) }
-default:
-    log("Operation not permitted: microphone access is denied for this app "
-        + "(System Settings > Privacy & Security > Microphone)")
+// ---------------------------------------------------------- source setup
+let writer = SegmentWriter(pattern: pattern, segmentSeconds: segmentSeconds, startNumber: startNumber)
+let queue = DispatchQueue(label: "lectern.capture", qos: .userInteractive)
+let ioQueue = DispatchQueue(label: "lectern.capture.io", qos: .userInitiated)
+let capture = Capture(writer: writer, io: ioQueue)
+
+var stopSource: () -> Void = {}       // release the mic / the screen stream
+var startSource: () -> Void = {}
+var sourceLabel = ""
+
+func permissionDenied(_ what: String, _ where_: String) -> Never {
+    log("Operation not permitted: \(what) access is denied for this app (System Settings > Privacy & Security > \(where_))")
     exit(3)
 }
 
-// --------------------------------------------------------------- device
 func findDevice(_ name: String?) -> AVCaptureDevice? {
     let types: [AVCaptureDevice.DeviceType]
     if #available(macOS 14.0, *) {
@@ -294,50 +328,164 @@ func findDevice(_ name: String?) -> AVCaptureDevice? {
     return AVCaptureDevice.default(for: .audio)
 }
 
-guard let device = findDevice(deviceName) else {
-    log("Cannot open audio device: no microphone found")
-    exit(4)
+func setupMic() {
+    guard let device = findDevice(deviceName) else {
+        log("Cannot open audio device: no microphone found")
+        exit(4)
+    }
+    let session = AVCaptureSession()
+    do {
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else { log("Cannot open audio device: input rejected"); exit(4) }
+        session.addInput(input)
+    } catch {
+        log("Cannot open audio device: \(error.localizedDescription)")
+        exit(4)
+    }
+    let output = AVCaptureAudioDataOutput()
+    // Ask AVFoundation for whisper's native format up front. The converter in
+    // Capture still handles anything else it delivers, including a mid-stream
+    // format change (this mic has opened as both 44.1 kHz mono and 48 kHz stereo).
+    output.audioSettings = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVSampleRateKey: OUT_RATE,
+        AVNumberOfChannelsKey: 1,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+    ]
+    output.setSampleBufferDelegate(capture, queue: queue)
+    guard session.canAddOutput(output) else { log("Cannot open audio device: output rejected"); exit(4) }
+    session.addOutput(output)
+
+    NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
+                                           object: session, queue: nil) { note in
+        let e = note.userInfo?[AVCaptureSessionErrorKey] as? NSError
+        log("capture runtime error: \(e?.localizedDescription ?? "unknown")")
+    }
+    NotificationCenter.default.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification,
+                                           object: device, queue: nil) { _ in
+        log("Input/output error: \(device.localizedName) was disconnected")
+    }
+    sourceLabel = "recording from \"\(device.localizedName)\""
+    startSource = { session.startRunning() }
+    stopSource = { session.stopRunning() }
 }
 
-let session = AVCaptureSession()
-let writer = SegmentWriter(pattern: pattern, segmentSeconds: segmentSeconds, startNumber: startNumber)
-let queue = DispatchQueue(label: "lectern.capture", qos: .userInteractive)
-let ioQueue = DispatchQueue(label: "lectern.capture.io", qos: .userInitiated)
-let capture = Capture(writer: writer, io: ioQueue)
-
-do {
-    let input = try AVCaptureDeviceInput(device: device)
-    guard session.canAddInput(input) else { log("Cannot open audio device: input rejected"); exit(4) }
-    session.addInput(input)
-} catch {
-    log("Cannot open audio device: \(error.localizedDescription)")
-    exit(4)
+// ---------------------------------------------------- system audio (SCK)
+// Everything the Mac plays, from any app, captured before it reaches the
+// speakers. ScreenCaptureKit is the only supported way to get that without a
+// virtual audio driver. It needs a display to anchor the stream, so a 2x2
+// one-frame-a-second video stream is requested and thrown away.
+@available(macOS 13.0, *)
+final class SystemTap: NSObject, SCStreamOutput, SCStreamDelegate {
+    func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer,
+                of type: SCStreamOutputType) {
+        if type == .audio { capture.handle(sb) }
+    }
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        log("Input/output error: system audio stream stopped: \(error.localizedDescription)")
+        DispatchQueue.main.async { finish("stream error", code: 1) }
+    }
 }
-let output = AVCaptureAudioDataOutput()
-// Ask AVFoundation for whisper's native format up front. The converter in
-// Capture still handles anything else it delivers, including a mid-stream
-// format change (this mic has opened as both 44.1 kHz mono and 48 kHz stereo).
-output.audioSettings = [
-    AVFormatIDKey: kAudioFormatLinearPCM,
-    AVSampleRateKey: OUT_RATE,
-    AVNumberOfChannelsKey: 1,
-    AVLinearPCMBitDepthKey: 16,
-    AVLinearPCMIsFloatKey: false,
-    AVLinearPCMIsBigEndianKey: false,
-    AVLinearPCMIsNonInterleaved: false,
-]
-output.setSampleBufferDelegate(capture, queue: queue)
-guard session.canAddOutput(output) else { log("Cannot open audio device: output rejected"); exit(4) }
-session.addOutput(output)
+var systemTapKeepAlive: AnyObject?     // the stream holds its delegate weakly
+var systemStream: AnyObject?
 
-NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification,
-                                       object: session, queue: nil) { note in
-    let e = note.userInfo?[AVCaptureSessionErrorKey] as? NSError
-    log("capture runtime error: \(e?.localizedDescription ?? "unknown")")
+func setupSystemAudio() {
+    guard #available(macOS 13.0, *) else {
+        log("Cannot open audio device: capturing system audio needs macOS 13 or newer")
+        exit(4)
+    }
+    // Screen Recording permission. The prompt appears on first use; the user
+    // then has to allow it in System Settings and restart the recording.
+    if !CGPreflightScreenCaptureAccess() {
+        _ = CGRequestScreenCaptureAccess()
+        permissionDenied("screen and system audio recording", "Screen & System Audio Recording")
+    }
+    let sem = DispatchSemaphore(value: 0)
+    var display: SCDisplay?
+    var failure: Error?
+    SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
+        display = content?.displays.first
+        failure = error
+        sem.signal()
+    }
+    if sem.wait(timeout: .now() + 20) == .timedOut {
+        log("Cannot open audio device: ScreenCaptureKit did not answer")
+        exit(4)
+    }
+    if let failure {
+        let ns = failure as NSError
+        if ns.code == -3801 {      // SCStreamErrorUserDeclined
+            permissionDenied("screen and system audio recording", "Screen & System Audio Recording")
+        }
+        log("Cannot open audio device: \(failure.localizedDescription)")
+        exit(4)
+    }
+    guard let display else { log("Cannot open audio device: no display to anchor the audio stream"); exit(4) }
+
+    let cfg = SCStreamConfiguration()
+    cfg.capturesAudio = true
+    cfg.excludesCurrentProcessAudio = true
+    cfg.sampleRate = Int(OUT_RATE)
+    cfg.channelCount = 1
+    cfg.width = 2
+    cfg.height = 2
+    cfg.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+    cfg.showsCursor = false
+    cfg.queueDepth = 3
+    let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+    let tap = SystemTap()
+    let stream = SCStream(filter: filter, configuration: cfg, delegate: tap)
+    do {
+        try stream.addStreamOutput(tap, type: .audio, sampleHandlerQueue: queue)
+        // A screen output that discards its frames: without one ScreenCaptureKit
+        // logs "stream output NOT found" for every frame it drops.
+        try stream.addStreamOutput(tap, type: .screen, sampleHandlerQueue: DispatchQueue(label: "lectern.capture.video"))
+    } catch {
+        log("Cannot open audio device: \(error.localizedDescription)")
+        exit(4)
+    }
+    systemTapKeepAlive = tap
+    systemStream = stream
+    sourceLabel = "recording system audio"
+    startSource = {
+        stream.startCapture { error in
+            if let error {
+                let ns = error as NSError
+                if ns.code == -3801 {
+                    permissionDenied("screen and system audio recording", "Screen & System Audio Recording")
+                }
+                log("Cannot open audio device: \(error.localizedDescription)")
+                exit(4)
+            }
+        }
+    }
+    stopSource = {
+        let done = DispatchSemaphore(value: 0)
+        stream.stopCapture { _ in done.signal() }
+        _ = done.wait(timeout: .now() + 5)
+    }
 }
-NotificationCenter.default.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification,
-                                       object: device, queue: nil) { _ in
-    log("Input/output error: \(device.localizedName) was disconnected")
+
+// Run the chosen setup only now: top-level globals initialise in order, so
+// everything the setup functions touch has to be declared above this point.
+if source == "mic" {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized: break
+    case .notDetermined:
+        let sem = DispatchSemaphore(value: 0)
+        var ok = false
+        AVCaptureDevice.requestAccess(for: .audio) { ok = $0; sem.signal() }
+        sem.wait()
+        if !ok { log("Operation not permitted: microphone access was denied"); exit(3) }
+    default:
+        permissionDenied("microphone", "Microphone")
+    }
+    setupMic()
+} else {
+    setupSystemAudio()
 }
 
 // ------------------------------------------------------------- shutdown
@@ -375,7 +523,7 @@ func finish(_ why: String, code: Int32 = 0, event: String? = nil,
     finishCode = code
     finishLock.unlock()
 
-    session.stopRunning()                       // mic released; callbacks drain
+    stopSource()                                // mic released; callbacks drain
     queue.sync {}                               // last callback has queued its write
     ioQueue.sync {
         writer.closeSegment()
@@ -470,6 +618,7 @@ var lastReported: Int64 = -1
 let ticker = DispatchSource.makeTimerSource(queue: ioQueue)
 ticker.schedule(deadline: .now() + 0.5, repeating: 0.5)
 ticker.setEventHandler {
+    if source == "system" { capture.padSilenceIfIdle() }
     let f = writer.totalFrames
     if f != lastReported {
         lastReported = f
@@ -481,7 +630,8 @@ ticker.setEventHandler {
 }
 ticker.resume()
 
-log("recording from \"\(device.localizedName)\" into \(pattern)"
+log("\(sourceLabel) into \(pattern)"
     + (pauseOnLid ? " (pauses if the lid closes)" : ""))
-session.startRunning()
+ioQueue.sync { capture.lastWriteAt = DispatchTime.now() }   // silence is counted from now
+startSource()
 dispatchMain()

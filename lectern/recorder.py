@@ -122,7 +122,7 @@ class RecordingState:
 
 
 
-def _require_capture_helper() -> None:
+def _require_capture_helper(system: bool = False) -> None:
     """On macOS, refuse to record without the sample-exact Swift helper.
 
     The ffmpeg avfoundation fallback is measured to drop about two thirds of
@@ -130,6 +130,17 @@ def _require_capture_helper() -> None:
     still compiling must wait for it, not silently lose the lecture.
     LECTERN_ALLOW_FFMPEG_CAPTURE=1 keeps the old fallback for debugging.
     """
+    if system:
+        # Only the native helper can hear the computer's own sound; ffmpeg and
+        # the portable helper would quietly record the microphone instead.
+        if not capture.portable() and (capture.available() is not None
+                                       or capture.ensure_built() is not None):
+            return
+        raise audio.PreflightError(
+            "helper_unavailable",
+            "Recording the computer's sound needs the Mac audio helper, which "
+            "could not be built. Install Apple's command line tools (run: "
+            "xcode-select --install), then restart Lectern.")
     if capture.portable() or os.environ.get("LECTERN_ALLOW_FFMPEG_CAPTURE") == "1":
         return
     if capture.available() is not None or capture.ensure_built() is not None:
@@ -225,7 +236,7 @@ class Recorder:
 
     # ------------------------------------------------------------- start
     def start(self, title: str, course: str = "", folder: str = "",
-              *, skip_probe: bool = False) -> dict:
+              *, skip_probe: bool = False, source: str | None = None) -> dict:
         with self._lock:
             if self._state is not None:
                 raise RecorderBusy("a recording is already in progress")
@@ -235,11 +246,12 @@ class Recorder:
                     f"Not enough free disk space to start "
                     f"({storage.free_bytes()/1e9:.1f} GB free).")
 
-            device = audio.resolve_device(fresh=True)   # indices shift; never cache this
+            # source=None: the saved default. Indices shift; never cache this.
+            device = audio.pick_device(source, fresh=True)
             if not skip_probe:
                 audio.probe(device)          # raises PreflightError with a kind
 
-            _require_capture_helper()        # before anything is created
+            _require_capture_helper(audio.is_system(device))   # before anything is created
 
             lec = Lecture.create(title=title, course=course, folder=folder)
             try:
@@ -274,6 +286,11 @@ class Recorder:
                 "device_index": device.index,
                 "log_offset": log_offset,
             }, durable=True)
+            # Kept on the lecture itself (recording.json lives in .work, which
+            # is gone once a lecture is finished): "Continue recording" on a
+            # finished YouTube lecture must not start recording the room.
+            lec.update(capture_source=audio.SOURCE_SYSTEM if audio.is_system(device)
+                       else audio.SOURCE_MIC)
         except Exception:
             self._signal_stop(proc, self._stop_file_for(lec.id))
             raise
@@ -307,6 +324,11 @@ class Recorder:
               start_number: int = 0) -> list[str]:
         # Never build here: a compile can take minutes and the lecture is
         # starting now. The server builds the helper at startup.
+        system = audio.is_system(device)
+        if system and (capture.portable() or capture.available() is None):
+            raise audio.PreflightError(
+                "helper_unavailable",
+                "Recording the computer's sound needs the Mac audio helper.")
         if capture.portable():
             stop_file = lec.work / "STOP"
             try:
@@ -324,7 +346,8 @@ class Recorder:
         helper = capture.available()
         if helper is not None:
             return [
-                str(helper), "--device", device.name,
+                str(helper),
+                *(["--source", "system"] if system else ["--device", device.name]),
                 "--out", self._seg_pattern(lec),
                 "--segment-seconds", str(config.SEGMENT_SECONDS),
                 "--start-number", str(start_number),
@@ -626,7 +649,7 @@ class Recorder:
                 raise RuntimeError(
                     f"this lecture cannot be resumed from its current state ({state!r})")
 
-            _require_capture_helper()
+            _require_capture_helper()      # before the (slow) archive decode
 
             lec.work.mkdir(parents=True, exist_ok=True)
             next_index = self._seed_from_archive_if_needed(lec)
@@ -634,11 +657,17 @@ class Recorder:
             t0 = time.monotonic()
             device = self._resume_device(lec, state)
             if device is None:
-                # A different mic than the one this lecture was recorded on
-                # (or no record of it): enumerate afresh and test it first.
-                device = audio.resolve_device(fresh=True)
+                # A different mic than the one this lecture was recorded on, or
+                # a finished lecture: the source it started with, enumerated
+                # afresh and tested first.
+                saved = lec.manifest().get("capture_source")
+                # No record (older lectures, imports) means the microphone.
+                device = audio.pick_device(
+                    saved if saved in (audio.SOURCE_MIC, audio.SOURCE_SYSTEM)
+                    else audio.SOURCE_MIC, fresh=True)
                 if not skip_probe:
                     audio.probe(device)
+            _require_capture_helper(audio.is_system(device))
 
             proc, log_offset = self._spawn(lec, device, start_number=next_index)
             try:
@@ -661,6 +690,10 @@ class Recorder:
         name = (_read_recording_json(lec) or {}).get("device_name")
         if not name:
             return None
+        if name == audio.SYSTEM_DEVICE.name:
+            # The computer's own sound has no cable to unplug; it only needs
+            # the same macOS support it had when the lecture started.
+            return audio.SYSTEM_DEVICE if audio.system_audio_supported() else None
         try:
             devices = audio.list_audio_devices(use_cache=False)   # a mic unplugged since the pause must not match
         except audio.PreflightError:
