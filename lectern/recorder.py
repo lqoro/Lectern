@@ -286,6 +286,11 @@ class Recorder:
                 "device_index": device.index,
                 "log_offset": log_offset,
             }, durable=True)
+            # Kept on the lecture itself (recording.json lives in .work, which
+            # is gone once a lecture is finished): "Continue recording" on a
+            # finished YouTube lecture must not start recording the room.
+            lec.update(capture_source=audio.SOURCE_SYSTEM if audio.is_system(device)
+                       else audio.SOURCE_MIC)
         except Exception:
             self._signal_stop(proc, self._stop_file_for(lec.id))
             raise
@@ -652,10 +657,14 @@ class Recorder:
             t0 = time.monotonic()
             device = self._resume_device(lec, state)
             if device is None:
-                # A different source than the one this lecture was recorded on
-                # (or no record of it): the saved default, enumerated afresh
-                # and tested first.
-                device = audio.pick_device(None, fresh=True)
+                # A different mic than the one this lecture was recorded on, or
+                # a finished lecture: the source it started with, enumerated
+                # afresh and tested first.
+                saved = lec.manifest().get("capture_source")
+                # No record (older lectures, imports) means the microphone.
+                device = audio.pick_device(
+                    saved if saved in (audio.SOURCE_MIC, audio.SOURCE_SYSTEM)
+                    else audio.SOURCE_MIC, fresh=True)
                 if not skip_probe:
                     audio.probe(device)
             _require_capture_helper(audio.is_system(device))
