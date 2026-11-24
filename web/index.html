@@ -131,6 +131,15 @@
     <label id="fNewFolderWrap" class="hidden">New class name<input id="fNewFolder" placeholder="e.g. BIO 101" maxlength="60"></label>
     <label>Lecture title<input id="fTitle" placeholder="e.g. Week 8 — Cell membranes" required></label>
     <p class="hint" id="fFolderHint"></p>
+    <label id="fSourceWrap" class="hidden">Record
+      <select id="fSource">
+        <option value="mic">Microphone — the room</option>
+        <option value="system">This Mac's sound — YouTube, Zoom, any app</option>
+      </select>
+    </label>
+    <p class="hint hidden" id="fSourceHint">Records exactly what this Mac plays, straight from the
+    system — no microphone, no echo. macOS asks for the Screen &amp; System Audio Recording
+    permission the first time. Everything playing is captured, including notification sounds.</p>
     <div id="micStatus" class="mic">Checking microphone…</div>
     <menu>
       <button type="button" value="cancel" class="ghost" data-close>Cancel</button>
@@ -204,6 +213,17 @@
     <h4>Storage</h4>
     <div id="storage" class="storage" aria-live="polite">
       <p class="hint">Measuring…</p>
+    </div>
+    <h4 id="srcHead" class="hidden">Record from</h4>
+    <div id="srcBox" class="hidden">
+      <label>Default source
+        <select id="setSource">
+          <option value="mic">Microphone</option>
+          <option value="system">This Mac's sound (any app)</option>
+        </select>
+      </label>
+      <p class="hint">Used by the quick-record key and as the starting choice in New recording.
+      "This Mac's sound" needs macOS 13 or newer and the Screen &amp; System Audio Recording permission.</p>
     </div>
     <h4>Quick record</h4>
     <p class="hint">One shortcut starts a recording from anywhere, titled with the date and time;

@@ -1003,13 +1003,59 @@ document.addEventListener("click", (e) => {
   showLegal(a.dataset.legal);
 });
 
+/* ------------------------------------------ record source (mic / this Mac) */
+let srcInfo = { source: "mic", system_supported: false };
+async function loadSource() {
+  try { srcInfo = await api("/api/source"); } catch { /* older backend: mic only */ }
+  const sup = !!srcInfo.system_supported;
+  $("fSourceWrap").classList.toggle("hidden", !sup);
+  $("srcHead").classList.toggle("hidden", !sup);
+  $("srcBox").classList.toggle("hidden", !sup);
+  $("fSource").value = sup ? srcInfo.source : "mic";
+  $("setSource").value = $("fSource").value;
+  syncSourceUi();
+}
+function chosenSource() { return srcInfo.system_supported ? $("fSource").value : "mic"; }
+function syncSourceUi() {
+  $("fSourceHint").classList.toggle("hidden", chosenSource() !== "system");
+}
+async function checkSource() {
+  const ms = $("micStatus"), system = chosenSource() === "system";
+  ms.className = "mic"; ms.textContent = system ? "Checking system audio…" : "Checking microphone…";
+  $("goBtn").disabled = true;
+  try {
+    const p = await jpost("/api/preflight", { source: chosenSource() });
+    if (chosenSource() !== (system ? "system" : "mic")) return;      // changed while checking
+    if (p.ok) {
+      ms.className = "mic ok";
+      ms.textContent = system
+        ? (p.silent ? "Ready — this Mac's sound (nothing is playing right now)."
+                    : "Ready — this Mac's sound (level " + p.rms + ").")
+        : `Microphone ready — ${p.device} (level ${p.rms}).`;
+      $("goBtn").disabled = false;
+    } else {
+      ms.className = "mic bad";
+      ms.textContent = `${p.error} ${p.detail || ""}`.trim();
+    }
+  } catch (e) {
+    ms.className = "mic bad";
+    ms.textContent = `${system ? "System audio" : "Microphone"} check failed: ${e.message}`;
+  }
+}
+$("fSource").onchange = () => { syncSourceUi(); checkSource(); };
+$("setSource").onchange = async () => {
+  try {
+    srcInfo = await jpost("/api/source", { source: $("setSource").value });
+    toast($("setSource").value === "system" ? "New recordings capture this Mac's sound." : "New recordings use the microphone.");
+  } catch (e) { toast(e.message || "Could not save that."); }
+  loadSource();
+};
+
 $("newBtn").onclick = async () => {
   if (!(await requireNotice())) return;
   $("fTitle").value = ""; $("fNewFolder").value = "";
   folderTouched = false;
-  const ms = $("micStatus");
-  ms.className = "mic"; ms.textContent = "Checking microphone…";
-  $("goBtn").disabled = true;
+  await loadSource();
   await refreshFolders();
   // Default: the class open in the sidebar, else the class used last time.
   let def = L.sel === ALL ? "" : L.sel;
@@ -1025,19 +1071,7 @@ $("newBtn").onclick = async () => {
   syncFolderUi();
   $("newDlg").showModal();
   $("fTitle").focus();            // Class comes first in the form; typing starts at the title
-  try {
-    const p = await jpost("/api/preflight");
-    if (p.ok) {
-      ms.className = "mic ok";
-      ms.textContent = `Microphone ready — ${p.device} (level ${p.rms}).`;
-      $("goBtn").disabled = false;
-    } else {
-      ms.className = "mic bad";
-      ms.textContent = `${p.error} ${p.detail || ""}`.trim();
-    }
-  } catch (e) {
-    ms.className = "mic bad"; ms.textContent = `Microphone check failed: ${e.message}`;
-  }
+  await checkSource();
 };
 
 $("newForm").addEventListener("submit", async (e) => {
@@ -1047,7 +1081,7 @@ $("newForm").addEventListener("submit", async (e) => {
   let folder = $("fFolder").value;
   if (folder === NEW_CLASS) folder = cleanFolder($("fNewFolder").value);
   try {
-    await jpost("/api/record/start", { title, course: "", folder });
+    await jpost("/api/record/start", { title, course: "", folder, source: chosenSource() });
     try { localStorage.setItem("lectern.lastFolder", folder); } catch { /* private mode */ }
     toast("Recording. You can close this tab — it keeps going.", 5200);
     poll();
@@ -1324,7 +1358,7 @@ async function loadSettings() {
   if (busy && $("settingsDlg").open) dlTimer = setTimeout(loadSettings, 800);
 }
 
-$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadStorage(); };
+$("settingsBtn").onclick = () => { $("settingsDlg").showModal(); loadSettings(); loadShortcut(); loadStorage(); loadSource(); };
 
 /* ------------------------------------------------------------ storage */
 
