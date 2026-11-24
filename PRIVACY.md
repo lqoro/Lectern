@@ -26,6 +26,10 @@
 - **Phone mode** (`Lectern-on-Phone.command`) makes Lectern reachable from
   devices on your local network, protected by an access key. Only use it on a
   network you trust.
+- **Recording this Mac's sound** (optional, macOS 13+) uses Apple's Screen &
+  System Audio Recording permission. Lectern captures audio only — it keeps no
+  screen image — and it captures everything the Mac plays, such as notification
+  sounds. It stays on your computer like any other recording.
 - **Recording other people** may be regulated where you are, and your school
   may have its own rules. See the recording notice in `TERMS.md`.
 
