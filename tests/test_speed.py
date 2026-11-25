@@ -313,7 +313,7 @@ class PreflightReuse(Base):
         R = self.recorder.Recorder
         for target, name, value in (
                 (A, "list_audio_devices", list_devices), (A, "_probe", probe),
-                (self.recorder, "_require_capture_helper", lambda: None),
+                (self.recorder, "_require_capture_helper", lambda *a, **k: None),
                 (self.storage, "free_bytes", lambda: 10 ** 12),
                 (R, "_spawn", lambda self_, lec, dev, start_number=0: (None, 0)),
                 (R, "_track", lambda self_, lec, proc, dev, off: {"device": dev.name})):
