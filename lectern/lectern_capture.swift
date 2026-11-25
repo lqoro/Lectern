@@ -96,6 +96,7 @@ final class SegmentWriter {
     var fd: Int32 = -1
     var segFrames: Int64 = 0
     var totalFrames: Int64 = 0
+    var sealed = false              // closed for good: later writes are dropped
 
     init(pattern: String, segmentSeconds: Int, startNumber: Int) {
         self.pattern = pattern
@@ -136,7 +137,17 @@ final class SegmentWriter {
         samples.withUnsafeBufferPointer { write($0) }
     }
 
+    /// The last close, when recording stops. Anything that still tries to
+    /// write afterwards (a late ticker, a buffer in flight) must not open a
+    /// new segment: it would be left with a placeholder header, and Continue
+    /// recording would count it as part of the lecture.
+    func seal() {
+        closeSegment()
+        sealed = true
+    }
+
     func write(_ samples: UnsafeBufferPointer<Int16>) {
+        if sealed { return }
         var off = 0
         while off < samples.count {
             if fd < 0 { openNext(); if fd < 0 { return } }
@@ -184,27 +195,70 @@ final class Capture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
         self.io = io
     }
 
-    // Only touched on `io`: when audio last reached the file (wall clock).
-    var lastWriteAt = DispatchTime.now()
+    // System source only. ScreenCaptureKit sends nothing while the Mac is
+    // quiet, so the file is kept on the recording's own clock: each buffer is
+    // written at the frame its timestamp names, and quiet stretches become
+    // silence of the right length. Padding by elapsed time instead lost up to
+    // half a second per pause and could write a late buffer's time twice.
+    var origin: Double? = nil          // on `io`: host time of frame 0, set once capture has started
+    var lastArrival = 0.0              // on `io`: host time a buffer was last placed
+    var pendingPts: Double? = nil      // on `queue`: timestamp of the buffer being handed
+    static let slack = Int64(OUT_RATE * 0.05)   // timestamp jitter that is left alone
+    static let holdBack = 0.25         // never pad the last moments: their audio may be in flight
+
+    static func hostNow() -> Double {
+        CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
+    }
 
     private func hand(_ p: UnsafePointer<Int16>, _ count: Int) {
         let copy = Array(UnsafeBufferPointer(start: p, count: count))
+        let pts = pendingPts
         framesIn += Int64(count)
         io.async {
-            self.lastWriteAt = DispatchTime.now()
-            self.writer.write(copy)
+            guard source == "system" else { self.writer.write(copy); return }
+            guard self.origin != nil else { return }     // before capture started
+            if let pts { self.place(copy, at: pts) } else { self.writer.write(copy) }
         }
     }
 
-    /// System source only, on `io` (the ticker): when no audio has arrived for
-    /// half a second, write silence for the time that has passed.
+    /// On `io`: write a system-audio buffer where its timestamp puts it. The
+    /// gap before it becomes silence; audio for time already written (as
+    /// silence) is dropped rather than written twice.
+    private func place(_ samples: [Int16], at pts: Double) {
+        guard var origin else { return }
+        lastArrival = Capture.hostNow()
+        let behind = Int64(((pts - origin) * OUT_RATE).rounded()) - writer.totalFrames
+        if abs(behind) > Int64(OUT_RATE * 5) {
+            // The ticker keeps the file within a second of the clock, so this
+            // is not the host clock after all: line up from here on.
+            log(String(format: "system audio timestamps off by %.1f s; realigning",
+                       Double(behind) / OUT_RATE))
+            origin += Double(behind) / OUT_RATE
+            self.origin = origin
+        }
+        let gap = Int64(((pts - origin) * OUT_RATE).rounded()) - writer.totalFrames
+        if gap > Capture.slack {
+            writer.write([Int16](repeating: 0, count: Int(gap)))
+            writer.write(samples)
+        } else if gap < -Capture.slack {
+            let skip = Int(min(-gap, Int64(samples.count)))
+            if skip < samples.count {
+                samples[skip...].withUnsafeBufferPointer { writer.write($0) }
+            }
+        } else {
+            writer.write(samples)
+        }
+    }
+
+    /// System source only, on `io` (the ticker): while no audio arrives, write
+    /// silence up to a moment ago so the file keeps up with the clock.
     func padSilenceIfIdle() {
-        let now = DispatchTime.now()
-        let idle = Double(now.uptimeNanoseconds &- lastWriteAt.uptimeNanoseconds) / 1e9
-        guard idle >= 0.5 else { return }
-        let frames = Int(idle * OUT_RATE)
-        lastWriteAt = now
-        writer.write([Int16](repeating: 0, count: frames))
+        guard let origin else { return }
+        let now = Capture.hostNow()
+        guard now - lastArrival >= 0.5 else { return }
+        let target = Int64(((now - Capture.holdBack - origin) * OUT_RATE).rounded())
+        let gap = target - writer.totalFrames
+        if gap > 0 { writer.write([Int16](repeating: 0, count: Int(gap))) }
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sb: CMSampleBuffer,
@@ -236,6 +290,7 @@ final class Capture: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
                        Double(framesIn) / OUT_RATE))
         }
         if pts.isFinite { nextPts = pts + Double(n) / asbd.mSampleRate }
+        pendingPts = source == "system" && pts.isFinite ? pts : nil
 
         let isFloat = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
         let isBig = asbd.mFormatFlags & kAudioFormatFlagIsBigEndian != 0
@@ -385,6 +440,9 @@ final class SystemTap: NSObject, SCStreamOutput, SCStreamDelegate {
         if type == .audio { capture.handle(sb) }
     }
     func stream(_ stream: SCStream, didStopWithError error: Error) {
+        if (error as NSError).code == -3801 {      // permission refused after the start
+            permissionDenied("screen and system audio recording", "Screen & System Audio Recording")
+        }
         log("Input/output error: system audio stream stopped: \(error.localizedDescription)")
         DispatchQueue.main.async { finish("stream error", code: 1) }
     }
@@ -460,6 +518,21 @@ func setupSystemAudio() {
                 log("Cannot open audio device: \(error.localizedDescription)")
                 exit(4)
             }
+            // Frame 0 is now: before this nothing is padded, so the preflight
+            // and the duration only count once macOS is really streaming.
+            ioQueue.async {
+                let now = Capture.hostNow()
+                capture.origin = now
+                capture.lastArrival = now
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            ioQueue.async {
+                if capture.origin == nil {
+                    log("Cannot open audio device: the system audio stream did not start")
+                    exit(4)
+                }
+            }
         }
     }
     stopSource = {
@@ -526,7 +599,7 @@ func finish(_ why: String, code: Int32 = 0, event: String? = nil,
     stopSource()                                // mic released; callbacks drain
     queue.sync {}                               // last callback has queued its write
     ioQueue.sync {
-        writer.closeSegment()
+        writer.seal()
         let secs = Double(writer.totalFrames) / OUT_RATE
         log(String(format: "stopped (%@): %.2f s written, %d input gap(s) totalling %.2f s",
                    why, secs, capture.gaps, capture.gapSeconds))
@@ -618,6 +691,7 @@ var lastReported: Int64 = -1
 let ticker = DispatchSource.makeTimerSource(queue: ioQueue)
 ticker.schedule(deadline: .now() + 0.5, repeating: 0.5)
 ticker.setEventHandler {
+    if writer.sealed { return }        // stopping: nothing more to write or report
     if source == "system" { capture.padSilenceIfIdle() }
     let f = writer.totalFrames
     if f != lastReported {
@@ -632,6 +706,5 @@ ticker.resume()
 
 log("\(sourceLabel) into \(pattern)"
     + (pauseOnLid ? " (pauses if the lid closes)" : ""))
-ioQueue.sync { capture.lastWriteAt = DispatchTime.now() }   // silence is counted from now
 startSource()
 dispatchMain()
