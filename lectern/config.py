@@ -6,7 +6,7 @@ from pathlib import Path
 from . import platform_compat as _pc
 
 APP_NAME = "Lectern"
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 
 # --- paths -------------------------------------------------------------
 # TRUTH: plain files, visible in Finder, outlive the app.
