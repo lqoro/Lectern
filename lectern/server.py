@@ -161,10 +161,40 @@ def api_status():
     return jsonify(st)
 
 
+def _source_arg(v) -> str | None:
+    """"mic", "system", or None for the saved default. Anything else is a bug
+    in the caller: it must not silently record the wrong thing."""
+    if v in (None, ""):
+        return None
+    if v not in (audio.SOURCE_MIC, audio.SOURCE_SYSTEM):
+        raise audio.PreflightError("no_device", f"Unknown audio source {v!r}.")
+    return v
+
+
+@app.get("/api/source")
+def api_source_get():
+    """What new recordings (and the quick-record key) capture by default, and
+    whether this computer can record its own sound at all."""
+    return jsonify({"source": audio.default_source(),
+                    "system_supported": audio.system_audio_supported()})
+
+
+@app.post("/api/source")
+def api_source_set():
+    try:
+        src = _source_arg(_json_body().get("source")) or audio.SOURCE_MIC
+        if src == audio.SOURCE_SYSTEM:
+            audio.pick_device(src)            # raises where it cannot work
+    except audio.PreflightError as e:
+        return jsonify({"error": e.message, "kind": e.kind}), 400
+    models.save_settings(record_source=None if src == audio.SOURCE_MIC else src)
+    return jsonify({"source": src, "system_supported": audio.system_audio_supported()})
+
+
 @app.post("/api/preflight")
 def api_preflight():
     try:
-        d = audio.resolve_device()
+        d = audio.pick_device(_source_arg(_json_body().get("source")))
         res = audio.probe(d)
         return jsonify({"ok": True, "device": d.name, **res})
     except audio.PreflightError as e:
@@ -181,11 +211,12 @@ def api_record_start():
     course = (body.get("course") or "").strip()
     folder = (body.get("folder") or "").strip()
     try:
+        source = _source_arg(body.get("source"))
         # Under the move lock: a class rename must never snapshot the folder
         # while a lecture is being created inside it (it would carry the new
         # lecture's directory away from the writer that is about to use it).
         with _MOVE_LOCK:
-            return jsonify(RECORDER.start(title, course, folder=folder))
+            return jsonify(RECORDER.start(title, course, folder=folder, source=source))
     except RecorderBusy as e:
         return jsonify({"error": str(e), "kind": "busy"}), 409
     except audio.PreflightError as e:

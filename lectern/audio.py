@@ -45,6 +45,58 @@ class Device:
     name: str
 
 
+# "Record what the Mac is playing" is modelled as a device so that status,
+# recording.json and resume need no special cases. It is never in the list the
+# avfoundation enumeration returns, so a mic can never be mistaken for it.
+SOURCE_MIC = "mic"
+SOURCE_SYSTEM = "system"
+SYSTEM_DEVICE = Device(-1, "System audio")
+
+
+def is_system(device: "Device") -> bool:
+    return device.index == SYSTEM_DEVICE.index and device.name == SYSTEM_DEVICE.name
+
+
+def system_audio_supported() -> bool:
+    """Recording the computer's own sound needs the native macOS helper and
+    ScreenCaptureKit (macOS 13+). Windows and Linux keep the microphone only."""
+    import os
+    import platform
+    if not pc.IS_MAC or capture.portable():
+        return False
+    if os.environ.get("LECTERN_CAPTURE_SOURCE") == "synthetic":
+        return False
+    try:
+        major = int((platform.mac_ver()[0] or "0").split(".")[0])
+    except ValueError:
+        return False
+    return major >= 13
+
+
+def default_source() -> str:
+    """The saved choice (Settings, or the last one picked), else the mic."""
+    from . import models
+    src = models.load_settings().get("record_source")
+    return src if src == SOURCE_SYSTEM and system_audio_supported() else SOURCE_MIC
+
+
+def pick_device(source: str | None = None, fresh: bool = False) -> "Device":
+    """The device for `source` ("mic", "system", or None for the saved default).
+    Asking for system audio where it cannot work is an error, never a quiet
+    fall-back to the microphone: that would record the room instead."""
+    src = source or default_source()
+    if src == SOURCE_SYSTEM:
+        if not system_audio_supported():
+            raise PreflightError(
+                "no_system_audio",
+                "Recording the computer's sound needs a Mac running macOS 13 or newer.",
+                "Use the microphone instead.")
+        return SYSTEM_DEVICE
+    if src != SOURCE_MIC:
+        raise PreflightError("no_device", f"Unknown audio source {src!r}.")
+    return resolve_device(fresh=fresh)
+
+
 class PreflightError(RuntimeError):
     """Raised when the microphone cannot be used. `kind` is machine-readable."""
 
@@ -222,6 +274,8 @@ def _probe(device: Device, seconds: float = 1.8) -> dict:
     that latency by a comfortable margin or a working mic fails the "almost
     no audio" check below before it ever gets going.
     """
+    if is_system(device):
+        return _probe_system(seconds)
     if capture.portable():
         return _probe_portable(device, seconds)
     with tempfile.TemporaryDirectory(prefix="lectern-probe-") as td:
@@ -312,6 +366,49 @@ def _probe_portable(device: Device, seconds: float) -> dict:
                              "The microphone opened but produced almost no audio.",
                              f"only {frames} frames captured")
     return _classify_audio(raw, frames)
+
+
+def _probe_system(seconds: float) -> dict:
+    """Open the system-audio stream for a moment. Unlike a microphone, a
+    silent result is NORMAL here (nothing is playing yet), so this checks only
+    that macOS lets Lectern listen -- the Screen Recording permission is the
+    thing that goes wrong -- and reports the level for information."""
+    helper = capture.available() or capture.ensure_built()
+    if helper is None:
+        raise PreflightError(
+            "helper_unavailable",
+            "The audio helper could not be built. Install Apple's command line "
+            "tools (run: xcode-select --install), then restart Lectern.")
+    with tempfile.TemporaryDirectory(prefix="lectern-probe-") as td:
+        try:
+            proc = subprocess.run(
+                [str(helper), "--source", "system", "--out",
+                 str(Path(td) / "probe-%03d.wav"), "--segment-seconds", "10",
+                 "--duration", str(seconds)],
+                capture_output=True, text=True, errors="replace",
+                stdin=subprocess.DEVNULL, timeout=seconds + 30)
+        except subprocess.TimeoutExpired as e:
+            raise PreflightError(
+                "device_error", "The computer's sound did not respond.",
+                "ScreenCaptureKit hung while opening the stream.") from e
+        stderr = (proc.stderr or "").strip()
+        wav = Path(td) / "probe-000.wav"
+        if proc.returncode == 3:
+            raise PreflightError(
+                "permission",
+                "macOS has not allowed Lectern to record the computer's sound.",
+                "Open System Settings > Privacy & Security > Screen & System Audio "
+                "Recording, switch on the app that starts Lectern (Terminal, or "
+                "Lectern), then start Lectern again. " + stderr[-300:])
+        if proc.returncode != 0 or not wav.exists() or wav.stat().st_size <= 44:
+            raise PreflightError("device_error",
+                                 "The computer's sound could not be opened.",
+                                 stderr[-800:])
+        with wave.open(str(wav)) as w:
+            frames = w.getnframes()
+            raw = w.readframes(frames)
+    return {"rms": pcm.rms(raw), "peak": pcm.peak(raw), "frames": frames,
+            "seconds": frames / config.SAMPLE_RATE, "silent": pcm.peak(raw) == 0}
 
 
 def _classify_open_failure(stderr: str) -> tuple[str, str]:

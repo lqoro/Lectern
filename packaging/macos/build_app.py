@@ -287,12 +287,17 @@ def fetch_sparkle() -> Path:
     return dest
 
 
-def build_swift(src: Path, out: Path, sparkle: Path | None = None) -> Path:
+def build_swift(src: Path, out: Path, sparkle: Path | None = None,
+                weak: tuple[str, ...] = ()) -> Path:
     say(f"Compiling {src.name}")
     out.parent.mkdir(parents=True, exist_ok=True)
     link = []
+    # A framework newer than MIN_MACOS is linked weakly, so the binary still
+    # starts on an older Mac and only the feature that needs it is missing.
+    for fw in weak:
+        link += ["-Xlinker", "-weak_framework", "-Xlinker", fw]
     if sparkle:
-        link = ["-F", sparkle, "-framework", "Sparkle",
+        link += ["-F", sparkle, "-framework", "Sparkle",
                 "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]
     run(["/usr/bin/xcrun", "swiftc", "-O", "-swift-version", "5",
          "-target", f"{ARCH}-apple-macos{MIN_MACOS}", *link, "-o", out, src])
@@ -548,7 +553,10 @@ def main() -> None:
     whisper = build_whisper()
     fluidaudio = build_fluidaudio()
     ffmpeg, ffprobe = build_ffmpeg()
-    capture = build_swift(config.CAPTURE_SRC, BUILD / "swift" / config.CAPTURE_BIN.name)
+    # ScreenCaptureKit ("This Mac's sound") arrived in macOS 12.3, after MIN_MACOS;
+    # the helper checks for macOS 13 before it uses it.
+    capture = build_swift(config.CAPTURE_SRC, BUILD / "swift" / config.CAPTURE_BIN.name,
+                          weak=("ScreenCaptureKit",))
     menu = build_swift(REPO / "lectern" / "lectern_menubar.swift", BUILD / "swift" / EXE_NAME, sparkle)
     backend = build_backend()
     assemble(menu, capture, backend, whisper, fluidaudio, ffmpeg, ffprobe, sparkle)
