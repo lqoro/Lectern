@@ -86,7 +86,7 @@ class HelperCommand(Base):
             p.start(); self.addCleanup(p.stop)
         with mock.patch.object(self.recorder.capture, "available", lambda: Path("/x/lectern-capture")):
             argv = self.recorder.Recorder()._argv(lec, self.audio.SYSTEM_DEVICE)
-        self.assertEqual(argv[:3], ["/x/lectern-capture", "--source", "system"])
+        self.assertEqual(argv[:3], [str(Path("/x/lectern-capture")), "--source", "system"])
         self.assertNotIn("--device", argv)
         self.assertNotIn("--pause-on-lid", argv)      # a lid close is covered by sleep handling
 
@@ -97,7 +97,7 @@ class HelperCommand(Base):
              mock.patch.object(self.recorder.pc, "IS_MAC", True), \
              mock.patch.object(self.recorder.capture, "available", lambda: Path("/x/lectern-capture")):
             argv = self.recorder.Recorder()._argv(lec, mic)
-        self.assertEqual(argv[:3], ["/x/lectern-capture", "--device", "MacBook Air Microphone"])
+        self.assertEqual(argv[:3], [str(Path("/x/lectern-capture")), "--device", "MacBook Air Microphone"])
         self.assertNotIn("--source", argv)
         self.assertIn("--pause-on-lid", argv)
 
@@ -224,10 +224,12 @@ class Api(Base):
         self.client = self.server.app.test_client()
 
     def test_source_setting_round_trips_and_is_refused_where_unsupported(self):
-        r = self.client.get("/api/source").get_json()
-        self.assertEqual((r["source"], r["system_supported"]), ("mic", False))   # Linux CI
-        bad = self.client.post("/api/source", json={"source": "system"})
-        self.assertEqual(bad.status_code, 400)
+        # Unsupported on purpose: the CI runners include a real Mac.
+        with mock.patch.object(self.audio, "system_audio_supported", lambda: False):
+            r = self.client.get("/api/source").get_json()
+            self.assertEqual((r["source"], r["system_supported"]), ("mic", False))
+            bad = self.client.post("/api/source", json={"source": "system"})
+            self.assertEqual(bad.status_code, 400)
         self.assertEqual(self.client.post("/api/source", json={"source": "bogus"}).status_code, 400)
         for p in self.mac():
             p.start(); self.addCleanup(p.stop)
